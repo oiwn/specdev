@@ -1,0 +1,23 @@
+session_name: specdev
+shell_command_before: "export RUST_LOG=info; clear"
+windows:
+  - window_name: code
+    focus: true
+    start-directory: ./
+    panes:
+      - shell_command:
+        - helix
+  - window_name: agent
+    start-directory: ./
+    panes:
+      - shell_command:
+        - opencode
+  - window_name: cmd
+    start-directory: ./
+    panes:
+      - shell_command:
+        - eza --long
+  - window_name: cmd2
+    panes:
+      - shell_command:
+        - eza --long
