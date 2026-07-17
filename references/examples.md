@@ -123,3 +123,83 @@ and well-defined, so GraphQL is not needed.
 ```
 
 The resolved dialogue is compressed. The open question stays as `^^^`.
+
+## Example 5: Routing a cluttered ctx.md
+
+The most common failure mode: an agent dumps scope, deferred items, roadmap
+pointers, and gotchas into `ctx.md`. The fix is **not** to rewrite the prose —
+it is to route each piece to its right home.
+
+**Before** (cluttered `ctx.md`):
+
+```md
+Active task: **portal overview page (v1)** — implementation not started.
+Roadmap pointer: this supersedes/absorbs the dashboard part of v1.8 in
+`specs/roadmap.md`.
+
+Scope:
+1. PriceTicker on / — reuse `latest_price_snapshots("usd")`.
+2. Trending-entities table — top entities in a 7-day window anchored to the
+   latest record's `publication_date`, not wall-clock "now".
+
+Deferred, own follow-up discussions:
+
+- LLM-generated daily content — how to form the LLM's context needs a
+  dedicated discussion before any subcommand is designed.
+- Charts — deferred; v1 uses tables instead.
+
+v1.9 (calendar/daily-digest page) remains separately unstarted.
+
+## SurrealDB quirks
+
+- `FETCH in` silently fails on relation tables — use `in.field AS alias`
+- Case-insensitive search: `string::lowercase(field) CONTAINS $query`
+```
+
+**After** — content routed to its home:
+
+`specs/ctx.md` (only the current task, as a checkbox plan):
+
+```md
+# Task: portal overview page (v1)
+State: in progress
+
+## Plan
+- [ ] PriceTicker on / — reuse `latest_price_snapshots("usd")`
+- [ ] Trending-entities table — 7-day window anchored to latest publication_date
+
+## Context
+Need a date-bounded variant of top_entity_summaries (repository.rs). Window
+anchors to the latest record's publication_date, not wall-clock now.
+
+## Next
+Implement the trending-entities query.
+```
+
+`specs/roadmap.md` (committed future direction):
+
+```md
+- v1.9 calendar/daily-digest page (separate, not yet started)
+```
+
+`specs/ideas.md` (uncommitted possibilities):
+
+```md
+- LLM-generated daily content: needs a discussion on how to form the LLM's
+  context before designing a wisdom subcommand.
+- Charts: deferred for v1 (tables instead); revisit rendering approach if back
+  in scope.
+```
+
+`specs/overview.md` → Gotchas / Knowledge:
+
+```md
+## Gotchas / Knowledge
+
+### SurrealDB
+- `FETCH in` silently fails on relation tables — use `in.field AS alias`.
+- Case-insensitive search: `string::lowercase(field) CONTAINS $query`.
+```
+
+Nothing was lost. Everything went where it belongs, and `ctx.md` is now narrow
+enough that any agent can resume the task in one read.
