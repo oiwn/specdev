@@ -121,7 +121,7 @@ fn help_and_version_exit_zero() {
 
     let (out, _err, code) = run(tmp.path(), &["--version"]);
     assert_eq!(code, 0);
-    assert!(out.contains("0.1.0"));
+    assert!(out.contains("0.2.0"));
 }
 
 #[test]

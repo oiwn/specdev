@@ -1,9 +1,9 @@
 use std::fs;
 use std::path::Path;
 
+use crate::Error;
 use crate::scan;
 use crate::status;
-use crate::Error;
 
 /// Canonical display order for the core spec files; any others follow alphabetically.
 const CANONICAL_ORDER: [&str; 5] = [

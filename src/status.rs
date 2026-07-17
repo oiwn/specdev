@@ -3,8 +3,8 @@ use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
 
-use crate::scan;
 use crate::Error;
+use crate::scan;
 
 pub fn run() -> Result<(), Error> {
     let specs_dir = Path::new("specs");
@@ -47,15 +47,11 @@ pub fn run() -> Result<(), Error> {
             } else {
                 println!("  [OK] {:<14} {:>4} lines  {:<10}", name, lines, age);
             }
-            if *name == "ctx.md" {
-                if let Some((done, total)) = ctx_steps {
-                    if total > 0 {
-                        println!(
-                            "       task progress: {}/{} steps done",
-                            done, total
-                        );
-                    }
-                }
+            if *name == "ctx.md"
+                && let Some((done, total)) = ctx_steps
+                && total > 0
+            {
+                println!("       task progress: {}/{} steps done", done, total);
             }
         } else {
             println!("  [--] {:<14} missing", name);
@@ -117,12 +113,14 @@ fn collect_warnings(
     let mut warnings = Vec::new();
 
     if let Some(content) = ctx_content {
-        if let Some((done, total)) = ctx_steps {
-            if total > 0 && done == total && !content.trim().is_empty() {
-                warnings.push(format!(
-                    "ctx.md: all {total} plan steps are checked. Archive the task to CHANGELOG.md and reset ctx.md."
-                ));
-            }
+        if let Some((done, total)) = ctx_steps
+            && total > 0
+            && done == total
+            && !content.trim().is_empty()
+        {
+            warnings.push(format!(
+                "ctx.md: all {total} plan steps are checked. Archive the task to CHANGELOG.md and reset ctx.md."
+            ));
         }
         let forbidden = unique_preserve(find_forbidden(content));
         for f in forbidden {
@@ -151,12 +149,12 @@ pub fn count_checkboxes(content: &str) -> (usize, usize) {
         let t = line.trim_start();
         if let Some(rest) = t.strip_prefix("- [") {
             let mut chars = rest.chars();
-            if let (Some(marker), Some(after)) = (chars.next(), chars.next()) {
-                if after == ']' {
-                    total += 1;
-                    if marker == 'x' || marker == 'X' {
-                        done += 1;
-                    }
+            if let (Some(marker), Some(after)) = (chars.next(), chars.next())
+                && after == ']'
+            {
+                total += 1;
+                if marker == 'x' || marker == 'X' {
+                    done += 1;
                 }
             }
         }

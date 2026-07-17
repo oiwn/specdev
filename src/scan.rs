@@ -90,10 +90,10 @@ pub fn parse_remarks(content: &str) -> Vec<Remark> {
                 resolved: false,
             });
             pending_idx = Some(remarks.len() - 1);
-        } else if trimmed.starts_with("&&&") {
-            if let Some(idx) = pending_idx.take() {
-                remarks[idx].resolved = true;
-            }
+        } else if trimmed.starts_with("&&&")
+            && let Some(idx) = pending_idx.take()
+        {
+            remarks[idx].resolved = true;
         }
     }
 
