@@ -89,7 +89,7 @@ Core spec files:
 Markers: 1 open, 10 resolved
 
 Warnings:
-  - ctx.md: all 4 plan steps are checked. Archive the task to CHANGELOG.md and reset ctx.md.
+  - ctx.md: all 4 plan steps are checked. Confirm with the user that the whole task is done before archiving.
   - CHANGELOG.md missing at project root — run `specdev init` to add it.
 ```
 
@@ -161,16 +161,18 @@ State: <not started | in progress | blocked>
 ## Plan
 - [ ] step one
 - [ ] step two
+## Findings      # optional — research/results when the next step is evaluate/discuss
 ## Context
-<only what the current unchecked step needs>
+<what the current unchecked step needs to act on>
 ## Next
 <the immediate next action>
 ```
 
-Starts header-only (`# Current Task Context`) when no task is active; append
-`: <task>` when one is. Tick boxes as you implement; when all are `[x]`, move
-the task to `CHANGELOG.md` and reset ctx to header-only (agent-driven, on user
-request — no destructive CLI command).
+Concise and **decision-relevant, not minimal**. The header is the task identity
+— don't rename it without explicit user intent; no-task state is header-only.
+A plan step is a child, not the task. Tick boxes as you implement; archive only
+at the explicit user request, once the **whole** titled task is done (the
+`status` nudge means confirm, not auto-archive).
 
 ### Markers (spec files only)
 

@@ -119,7 +119,7 @@ fn collect_warnings(
             && !content.trim().is_empty()
         {
             warnings.push(format!(
-                "ctx.md: all {total} plan steps are checked. Archive the task to CHANGELOG.md and reset ctx.md."
+                "ctx.md: all {total} plan steps are checked. Confirm with the user that the whole task is done before archiving."
             ));
         }
         let forbidden = unique_preserve(find_forbidden(content));
@@ -344,7 +344,7 @@ nothing
             Path::new("."),
         );
         assert!(
-            warnings.iter().any(|w| w.contains("Archive the task")),
+            warnings.iter().any(|w| w.contains("Confirm with the user")),
             "got {warnings:?}"
         );
     }

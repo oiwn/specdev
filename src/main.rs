@@ -52,6 +52,8 @@ enum SkillCommands {
         #[arg(long)]
         local: bool,
     },
+    /// Check whether the installed skill is up to date, stale, or modified
+    Check,
 }
 
 fn main() {
@@ -63,6 +65,7 @@ fn main() {
         Commands::List { stats } => list::run(stats),
         Commands::Skill { command } => match command {
             SkillCommands::Install { local } => skill::install(local),
+            SkillCommands::Check => skill::check(),
         },
     };
     if let Err(e) = result {
@@ -126,6 +129,16 @@ mod tests {
             cli(&["skill", "install", "--local"]).unwrap(),
             Commands::Skill {
                 command: SkillCommands::Install { local: true }
+            }
+        );
+    }
+
+    #[test]
+    fn parses_skill_check() {
+        assert_eq!(
+            cli(&["skill", "check"]).unwrap(),
+            Commands::Skill {
+                command: SkillCommands::Check
             }
         );
     }

@@ -3,10 +3,10 @@ name: specdev
 description: >
   Use when working in a project that uses specification-driven development.
   Start from specs/overview.md and specs/ctx.md, treat specs as the active
-  task context, keep ctx.md narrow (a checkbox plan for the current task
-  only), route content to its right home (changelog/roadmap/ideas/overview),
-  address user remarks marked with ^^^, answer with &&&, and keep specs
-  current while planning or implementing. Trigger when the user asks to work
+  task context, keep ctx.md concise and decision-relevant (a checkbox plan for
+  the current task), route content to its right home
+  (changelog/roadmap/ideas/overview), address user remarks marked with ^^^,
+  answer with &&&, and keep specs current while planning or implementing. Trigger when the user asks to work
   on specs, continue from specs, address remarks, compress specs, or when
   entering a project with a specs/ directory.
 ---
@@ -16,12 +16,30 @@ coordination, and memory surface. Specs are Markdown files in a `specs/`
 directory. The agent reads them, updates them, and uses them as context
 before writing code.
 
+## Invariants
+
+Hold these at all times. They exist because agents silently drift on exactly
+these points.
+
+- **Task identity is immutable by default.** The `ctx.md` title is the active
+  task. Don't rename, narrow, replace, or archive it without explicit user
+  intent.
+- **Never bulk-replace an active `ctx.md`.** Make the smallest surgical edit
+  that achieves the change. Wholesale overwrite or delete requires explicit
+  reset/archive/compress intent.
+- **Archival requires explicit intent.** All steps done is necessary, not
+  sufficient — the titled task must be finished AND the user must explicitly
+  ask to archive/close/reset. When uncertain, leave `ctx.md` active and ask.
+- **Preserve decision-relevant state.** "Concise" means concise and
+  decision-relevant, not minimal. Keep findings, decisions, open questions, and
+  constraints that remain relevant to the next unchecked step.
+
 ## Session startup
 
 When entering a project, or when the user says "continue from specs":
 
 1. Read `specs/overview.md` (durable project backdrop + gotchas).
-2. Read `specs/ctx.md` (the current task — narrow, with a checkbox plan).
+2. Read `specs/ctx.md` (the current task — concise, with a checkbox plan).
 3. If `ctx.md` has no active task (just the `# Current Task Context` header),
    ask the user what to work on, or take the next item from `specs/roadmap.md`
    (see "The working loop"). The header-only state is valid, not an error.
@@ -72,8 +90,9 @@ the intended loop — keep each file to its stage.
 
 ## ctx.md — the current task (soft template)
 
-`ctx.md` is narrow: only what is needed to implement the **current** task. It is
-not a broad scope document. Recommended shape:
+`ctx.md` is **concise and decision-relevant, not minimal** — enough for the
+agent to execute the current task autonomously, without stale scope, deferred
+items, or gotchas (route those to their home files). Recommended shape:
 
 ```md
 # Current Task Context: <one line>
@@ -81,40 +100,54 @@ State: <not started | in progress | blocked>
 ## Plan
 - [ ] step one
 - [ ] step two
+## Findings      # optional — concise research/results when the next step is evaluate/discuss
 ## Context
-<only what the current unchecked step needs>
+<what the current unchecked step needs to act on>
 ## Next
 <the immediate next action>
 ```
 
-- The file always starts with the `# Current Task Context` header. When there
-  is an active task, append `: <one-line task>` to it — the header doubles as
-  the task title and as the description `specdev list` shows.
-- The **no-task state is header-only** (`# Current Task Context`), not a blank
-  file.
-- `## Plan` is the core: an ordered checklist of the task's steps.
-- Tick boxes (`[ ]` -> `[x]`) as you implement. Progress is visible across
-  sessions this way.
-- `## Context` holds only what the *current unchecked step* needs — not the
-  whole task's scope, and never deferred/roadmap/gotcha content.
+- The file always starts with `# Current Task Context`; append `: <task>` when
+  a task is active. The header **is the task identity** — don't rename it
+  without explicit user intent. The no-task state is header-only.
+- `## Plan` is the ordered checklist of the task's steps. A step is a **child**,
+  not the task — completing one step is never permission to reset or archive.
+- `## Findings` (optional): compact accumulated research, decisions, results.
+  Use it when the next step is evaluate/discuss/select. Keep it concise and
+  decision-relevant; never delete it without explicit reset intent.
+- `## Context` holds what the *current unchecked step* needs to act on.
+- Tick boxes (`[ ]` -> `[x]`) as you implement. Prefer **surgical edits** —
+  re-read the target section, then patch it; never rewrite or bulk-delete an
+  active `ctx.md` to change one thing.
 
-## Definition of done + archive rule
+## Task identity + archival
 
-When **every** checkbox in `ctx.md` is `[x]`, the task is done:
+**Task identity is immutable by default.** The `ctx.md` title is the active
+task. Don't rename, narrow, replace, or archive it because a step completed or
+because the user praised one piece of work. "X works; let's decide what's next"
+confirms X, not the parent task.
 
-1. Move the task into `CHANGELOG.md` as a dated block at the top (newest first).
-2. Reset `ctx.md` to the header-only state (`# Current Task Context`), or to the
-   next single task.
+**Archive only when ALL three hold:**
 
-This archival is **agent-driven, on user request**. There is no destructive CLI
-command for it, by design. `specdev status` will surface the signal that a task
-looks done (all boxes checked) but has not been archived yet.
+1. Every checkbox in the active task's plan is `[x]`; **and**
+2. The titled task itself — not merely one child step — is finished; **and**
+3. The user explicitly asks to archive/close/reset, or explicitly states the
+   named task is finished.
+
+All three are required. "All steps checked" is necessary, not sufficient, and
+`specdev status`'s archive nudge means *confirm with the user* — it is **not**
+permission to auto-archive. When uncertain, leave `ctx.md` active and ask.
+
+To archive once the gate holds: move the task into `CHANGELOG.md` as a dated
+block at the top (newest first), then reset `ctx.md` to header-only or to the
+next single task. Archival is agent-driven; there is no destructive CLI command
+for it, by design.
 
 ## Core spec files
 
 - **`specs/overview.md`** — durable project overview (architecture, data flow,
   public surfaces) **and the Gotchas/Knowledge home**. Broad; no task detail.
-- **`specs/ctx.md`** — current task (narrow checkbox plan, above). Header-only
+- **`specs/ctx.md`** — current task (checkbox plan, above). Header-only
   (`# Current Task Context`) when no task is active.
 - **`specs/roadmap.md`** — committed future direction (what we are doing next).
   Promote items here from `ideas.md` when decided.
@@ -182,18 +215,43 @@ When the user asks to work on a spec file with remarks:
 
 ## Context compression
 
-When the user asks to compress a spec:
+Compress only on **explicit user request** — e.g. "compress / fold / condense /
+clean up the `^^^`/`&&&` dialogue." A general "rewrite this section for clarity"
+is **not** a compress request. Never auto-compress.
+
+To compress:
 
 1. Read the spec file.
-2. Identify all `^^^`/`&&&` pairs where the issue is resolved.
-3. Rewrite the spec sections according to the dialogue — fold the decisions
-   into the surrounding prose, removing both markers and the back-and-forth.
-4. Preserve any unresolved `^^^` remarks as-is.
-5. The rewritten spec should read as a clean document reflecting the final
-   state of decisions, not a transcript of the discussion.
+2. Identify the resolved `^^^`/`&&&` pairs.
+3. Fold each resolved decision into the surrounding prose, removing the markers
+   and the back-and-forth. **Keep each pair adjacent to the assertion it
+   concerns — never relocate resolved markers into a detached Q&A transcript**
+   (e.g. at the end of the file).
+4. Preserve unresolved `^^^` remarks as-is.
+5. The result reads as clean prose reflecting final decisions, not a transcript.
 
-Compression is only by explicit user request. Never auto-compress. See
-`references/examples.md` for before/after examples.
+See `references/examples.md` for before/after examples.
+
+## Before mutating a spec
+
+Before editing a spec, classify the intended change as exactly one of:
+
+- **tick a child step** — `[ ]` -> `[x]`; nothing else.
+- **update findings/context** — add or refine decision-relevant state for the
+  current task.
+- **add a future idea** — to `ideas.md` or `roadmap.md`.
+- **compress** — fold resolved `^^^`/`&&&` dialogue into prose.
+- **archive** — move a finished task to `CHANGELOG.md` (requires the archive
+  gate above).
+
+State that classification in one line before editing. Some operations always
+require **explicit user intent** (never infer them): changing the task title,
+resetting or archiving `ctx.md`, editing `CHANGELOG.md`, deleting findings, or
+compressing. When the change type is ambiguous, ask before editing.
+
+Make the **smallest edit** that achieves the classified change: re-read the
+target section, then surgical-patch it. Never rewrite a whole section to change
+one line.
 
 ## Behavior
 
@@ -201,21 +259,28 @@ Compression is only by explicit user request. Never auto-compress. See
 
 - Treat specs as the source of task context when the user points to them.
 - Start with `overview.md` and `ctx.md` when entering a project.
-- Keep `ctx.md` narrow — route content to its right home per the table above.
+- Keep `ctx.md` concise and decision-relevant — route other content to its home
+  per the table above.
 - Update specs before implementation when the task is ambiguous or strategic.
 - Proceed to implementation when the spec makes the next step clear.
 - Preserve user wording when it carries useful intent.
 - Preserve addressed `^^^`/`&&&` pairs until the user asks to compress.
 - Keep unresolved issues visible.
-- Compact stale text when it no longer reflects reality.
-- Tick `ctx.md` checkboxes as you implement, and archive the task when all are
-  `[x]`.
+- Classify the edit and make the smallest surgical patch; ask before destructive
+  ops (title change, archive/reset, CHANGELOG edit, delete findings, compress).
+- Tick `ctx.md` checkboxes as you implement; archive only at the explicit user
+  request, per the archive gate.
 
 **Do not:**
 
-- Silently delete `^^^` remarks.
-- Delete `^^^` remarks after adding `&&&` answers (the dialogue stays until
-  compression).
+- Silently rename, narrow, replace, or archive the task title.
+- Bulk-replace or wholesale-delete an active `ctx.md` to change one thing.
+- Archive because a child step finished or because `status` nudged you — confirm
+  with the user that the whole titled task is done.
+- Delete findings/research without explicit reset intent.
+- Silently delete `^^^` remarks, or delete them after adding `&&&` answers (the
+  dialogue stays until compression).
+- Relocate resolved `^^^`/`&&&` pairs into a detached Q&A transcript.
 - Mark a remark as addressed unless it has actually been addressed with `&&&`.
 - Bury open questions in prose.
 - Overwrite user-authored nuance with a generic plan.
