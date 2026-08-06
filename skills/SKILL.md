@@ -191,6 +191,8 @@ distinguish user remarks from agent answers during spec editing.
 
 Rules:
 
+- The agent never writes `^^^`. That marker belongs exclusively to the human.
+  The agent writes `&&&` answers.
 - When addressing a `^^^` remark, add an adjacent `&&&` answer. Do not delete
   the original `^^^` line.
 - If a remark is unresolved, keep it marked with `^^^` — no `&&&`.
