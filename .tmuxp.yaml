@@ -1,5 +1,5 @@
 session_name: specdev
-shell_command_before: "export RUST_LOG=info; clear"
+shell_command_before: "set RUST_LOG info; clear"
 windows:
   - window_name: code
     focus: true
@@ -21,3 +21,7 @@ windows:
     panes:
       - shell_command:
         - eza --long
+  - window_name: yazi
+    panes:
+      - shell_command:
+        - yazi

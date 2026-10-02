@@ -22,6 +22,9 @@ teaches is documented in `skills/SKILL.md`, not here.
 The CLI only inspects and scaffolds; it never mutates spec content. Archival,
 compression, and edits are agent-driven (taught by the skill).
 
+Planned direction: multi-agent parallel execution ("Dark Factory") — design in
+`specs/factory.md`.
+
 ## Build & test
 
 `cargo build && cargo test && cargo clippy -- -D warnings`.
