@@ -14,7 +14,7 @@ Dark Factory track — design in `specs/factory.md`; build phases and their step
 
 ## v0.5 — Verify, archive, quality (Phases 5–7)
 
-- `task verify` (Acceptance commands + scope check via the `git` CLI, read-only) and `check --staged` for pre-commit.
+- Scope check via the `git` CLI, read-only (`check`, and `check --staged` for pre-commit); `verify → review` gated on ticked Acceptance boxes. specdev runs no project commands.
 - `task done`: archive to `done/`, changelog entry, index.
 - Quality gate metrics and thresholds; `specdev fmt` for soft-wrapped specs.
 

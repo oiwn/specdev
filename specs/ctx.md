@@ -17,10 +17,12 @@ Phase 4 — state commands: `task advance` / `task block` / `task set` / `task s
 - [ ] `block --reason`, `set <field> <value>` (plain fields only: `source`, `depends`, extra fields), `scope add|rm <path> --reason`
 - [ ] Every command: rewrite frontmatter + append `## Log` line only, regenerate `_index.md`, never touch prose
 
-Phase 5 — `task verify` + `check --staged`:
-- [ ] `task verify <id>`: run `acceptance.default` + task Acceptance commands, report pass/fail per command; changed files must match `scope`. Changed files come from a `vcs` module that calls the `git` CLI read-only (`git diff --name-only -z HEAD`, `git diff --cached --name-only -z`, `git ls-files --others --exclude-standard -z`); one function `changed_files()`, faked in tests
-- [ ] `check --staged`: staged files outside the active task's `scope` → warning; wire into `prek.toml`
+Phase 5 — scope check + Acceptance gate (specdev runs no project commands):
+- [ ] `vcs` module: `changed_files()` via the `git` CLI, read-only (`git diff --name-only -z HEAD`, `git diff --cached --name-only -z`, `git ls-files --others --exclude-standard -z`); faked in tests
+- [ ] `check`: working-tree files outside the active task's `scope` → error; `check --staged`: staged files outside `scope` → warning; wire `--staged` into `prek.toml`
 - [ ] Without git: scope check skipped with a warning, rest still runs
+- [ ] `advance` refuses `verify → review` while any `## Acceptance` checkbox is unticked
+- [ ] `task new` pre-fills `## Acceptance` with `acceptance.default` as unchecked items; add `Manual checks` to default `optional_sections`
 
 Phase 6 — `task done`:
 - [ ] Requires status `approval`; moves file to `specs/tasks/done/`, appends a dated entry to `CHANGELOG.md` (title + source + one-line summary), regenerates `_index.md`
@@ -118,7 +120,7 @@ Log location: per task — a `## Log` section at the end of each `specs/tasks/<i
 
 ## Context
 - Source of truth for the design: `specs/factory.md` (compressed 2026-10-03). This file only holds the build order and types.
-- Key decisions: specdev is an agent-agnostic tool, not an orchestrator; one active task, others queued; `scope` approved at `draft → ready`; state changes only via commands, validated against the per-task `## Log` (no git dependency); task contract defined in `specdev.toml`; human owns branches, PR, merge; git is only ever read (`task verify`, `check --staged`).
+- Key decisions: specdev is an agent-agnostic tool, not an orchestrator; one active task, others queued; `scope` approved at `draft → ready`; state changes only via commands, validated against the per-task `## Log` (no git dependency); task contract defined in `specdev.toml`; human owns branches, PR, merge; git is only ever read (`check`, `check --staged`); specdev never runs project commands (tests, builds) — the agent does; macOS first, then Linux, no Windows.
 - Dependencies (decided 2026-10-03; keep the tree small, justify any addition):
   - Frontmatter: hand-written parser for the flat-YAML subset (scalars + inline lists); no YAML crate.
   - Markdown: `comrak` with `default-features = false` (no syntect, no CLI) — an investment, since most of specdev is Markdown work. comrak's round-trip is not byte-preserving, so: read via AST + source positions; state commands splice frontmatter/`## Log` edits by position; only `fmt` re-renders. `^^^`/`&&&` lines sit inside paragraphs as soft breaks — `fmt` must keep them on their own lines.

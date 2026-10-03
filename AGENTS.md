@@ -18,6 +18,8 @@ task. Always read `specs/overview.md` and `specs/ctx.md` before coding.
 
 - **A tool for agents, not an orchestrator.** specdev never launches agents, never calls an LLM, never creates branches, commits, or PRs. Git is only ever read, by calling the `git` CLI — no `git2`/`gix` bindings.
 - **Agent-agnostic.** No code or docs may assume a specific agent, harness, or CI.
+- **Runs no project commands.** specdev never executes tests, lints, or builds; the agent does and records the result (ticked Acceptance boxes).
+- **Platforms: macOS first, then Linux.** No Windows support; don't add Windows-specific code paths.
 - **Structured state goes through commands; prose stays agent-edited.** Commands rewrite only what they own (frontmatter, `## Log`, generated indexes) and must keep the rest of a file byte-for-byte.
 - **Hardcoded where semantics matter.** Task statuses and stages are fixed enums, not config.
 

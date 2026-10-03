@@ -5,7 +5,8 @@ Design for driving a repo with agents through a **multi-stage pipeline per task*
 ## Direction
 
 - **specdev manages specs and keeps them sorted.** It helps agents and humans manage human-readable, human-editable specification and context files: every kind of content in its home, every task in a valid state.
-- **A tool for agents, not an orchestrator.** specdev never launches agents, never calls an LLM, and never writes to git (no branches, commits, or PRs). It only reads changed-file lists by calling the `git` CLI. It stores state, validates it, and tells the agent where a task stands. Running stages is the agent's job.
+- **A tool for agents, not an orchestrator.** specdev never launches agents, never calls an LLM, and never writes to git (no branches, commits, or PRs). It only reads changed-file lists by calling the `git` CLI. It never runs project commands either (tests, lints, builds): running them is the agent's job, orchestrated by the agent or its harness. specdev stores state, validates it, and tells the agent where a task stands.
+- **Platforms: macOS first, then Linux.** Windows is not supported; this is a personal-scale tool.
 - **Agent-agnostic.** No dependency on any specific agent or CI. The skill describes each stage; whichever agent you use follows it.
 - **Output for humans and agents.** Every command supports `--format text|json|toon`: text for humans, JSON for tools, TOON (token-oriented object notation) as a compact format for LLM agents.
 - **The unit of work is the task, not the agent.** One agent may walk every stage of a task, or different agents may take different stages. One agent may also take several small tasks in sequence.
@@ -46,9 +47,11 @@ Loop: verify fail or review changes → fix → verify again.
    - Codes inside `scope`, ticks Plan boxes.
    - If a needed file is missing from `scope`, see "Scope contract".
    - Next: all boxes ticked → `verify`.
-4. **verify** — deterministic, no judgement. The agent runs it locally.
-   - `specdev task verify <id>` runs the Acceptance commands — tests, lint, build, format check; defaults from `specdev.toml` plus the task's own — and checks changed files against `scope` (changed files come from the `git` CLI; see "Scope contract").
-   - Manual e2e steps listed in Acceptance are not run here; the human runs them at `approval`.
+4. **verify** — agent; specdev runs nothing.
+   - The agent runs each `## Acceptance` command (tests, lint, build, format check) and ticks its checkbox when it passes.
+   - `specdev check` verifies changed files stay inside `scope` (see "Scope contract").
+   - Gate: `specdev task advance` refuses `verify → review` while any Acceptance checkbox is unticked.
+   - `## Manual checks` (human e2e steps) are not part of this gate; the human runs them at `approval`.
    - Next: pass → `review`; fail → `fix`.
 5. **review** — agent, ideally a fresh session or a different model.
    - Judges the diff against Plan and `scope`; accepts or rejects each scope expansion; writes `## Review`.
@@ -67,9 +70,9 @@ Loop: verify fail or review changes → fix → verify again.
 
 Notes:
 
-- **Verify is not judgement.** It is the deterministic gate; agents only act on its output, so "tests pass" is never just an agent's claim.
+- **specdev runs nothing.** "Tests pass" is the agent's recorded claim (ticked Acceptance boxes); specdev only gates on the ticks and on scope. Review and the human's CI on the PR are the backstops.
 - Status `approval` (waiting for the human) is deliberately not named `review`, to avoid clashing with the agent `review` stage.
-- Statuses and stages are both hardcoded enums in specdev, not configurable. Each stage has defined semantics (verify is the deterministic gate, fix bumps `attempts`).
+- Statuses and stages are both hardcoded enums in specdev, not configurable. Each stage has defined semantics (verify gates on ticked Acceptance, fix bumps `attempts`).
 
 ## Scope contract
 
@@ -79,7 +82,7 @@ Notes:
 - **Agreed at `draft → ready`.** The human approves scope and plan together. `specdev task advance` records the approved scope in the task's `## Log`, so later expansions are measured against it without needing git history.
 - **Locked from `implement` on.** The agent changes only files inside `scope`, plus the task file itself.
 - **Expansion is declared, never silent.** Planning can't foresee every file. The agent runs `specdev task scope <id> add <path> --reason "..."`, which updates `scope` and logs the reason. Review accepts or rejects each expansion. A large expansion (many files, a new module) means the plan was wrong → `blocked`, back to `draft`.
-- **Checked continuously.** A pre-commit hook (`specdev check --staged`) warns when staged files fall outside the active task's `scope`. `specdev task verify` does the same check for the whole working tree. Changed files come from the `git` CLI, read-only: `git diff --name-only -z HEAD`, `git diff --cached --name-only -z`, `git ls-files --others --exclude-standard -z`. Without git, or outside a repo, the scope check is skipped with a warning; everything else still runs.
+- **Checked continuously.** A pre-commit hook (`specdev check --staged`) warns when staged files fall outside the active task's `scope`. `specdev check` does the same check for the whole working tree. Changed files come from the `git` CLI, read-only: `git diff --name-only -z HEAD`, `git diff --cached --name-only -z`, `git ls-files --others --exclude-standard -z`. Without git, or outside a repo, the scope check is skipped with a warning; everything else still runs.
 
 ## How it runs
 
@@ -94,7 +97,7 @@ Roles are stages any agent can play, not separate products.
 
 - **Planner** — writes the task file from an issue or roadmap item. Agent or human. Never writes code.
 - **Implementer** — `implement` and `fix` stages.
-- **Verifier** — `specdev task verify`; no judgement.
+- **Verifier** — `verify` stage; runs the Acceptance commands and ticks them. specdev only gates on the ticks.
 - **Reviewer** — `review` stage; judges the diff against Plan and contract.
 - **Human** — picks the issue, approves the plan, e2e check, branches, PR, merge.
 
@@ -118,7 +121,8 @@ blocked_reason: "..."        # required iff status = blocked
 # Task: warn when ctx.md is stale while in progress
 
 ## Plan          (required, checkboxes)
-## Acceptance    (required, verify commands + manual e2e steps)
+## Acceptance    (required, checkboxes: commands the agent runs at verify)
+## Manual checks (optional, checkboxes: human e2e steps at approval)
 ## Context       (optional)
 ## Findings      (optional)
 ## Review        (optional, written by review, consumed by fix)
@@ -178,7 +182,7 @@ max_lines = 400
 ```
 
 - The required frontmatter fields and the `## Log` section are fixed by specdev; the config adds to them, it can't remove them.
-- Tasks inherit `acceptance.default` and may add their own commands.
+- `task new` pre-fills `## Acceptance` with `acceptance.default` as unchecked items; tasks may add their own. specdev never executes them.
 - Quality numbers are placeholders, to be tuned.
 
 ## State vs prose
@@ -213,7 +217,6 @@ specdev task set <id> <field> <value>     # plain fields: source, depends
 specdev task scope <id> add|rm <path> [--reason "..."]
 specdev task advance <id> [--to <stage>]  # legal moves; fix bumps attempts
 specdev task block <id> --reason "..."
-specdev task verify <id>                  # Acceptance + scope check
 specdev task done <id>                    # to done/, changelog, index
 specdev task list
 specdev task show <id>                    # status/stage + next-step hint
