@@ -11,6 +11,18 @@ task. This coexists with any conventional release notes already here.
 - files touched / decisions locked
 -->
 
+## 2026-10-03 — New specdev version: design + Phases 1–2
+
+Part of the ongoing task "New specdev version and updated workflow" (Phases 3–8 remain in `specs/ctx.md`).
+
+- **Design ("Dark Factory")** in `specs/factory.md`: a multi-stage pipeline per task (draft → ready → implement → verify → review → fix → approval → done), one active task with a queue, a `scope` file contract approved at `draft → ready`, a per-task `## Log` so state is validated without git history, the task contract defined in `specdev.toml`, hardcoded `Status`/`Stage` enums. specdev is an agent-agnostic tool, not an orchestrator; it never writes to git and reads it only via the `git` CLI.
+- **Specs aligned**: roadmap milestones mapped to the phases, overview states the new direction, skill formatting rule switched to soft wraps (plus the practical moshack additions: edit-scope boundary, archival-gate wording, remark/prose consistency, compression boundary).
+- **`AGENTS.md`** rewritten with design principles, Rust conventions (no `mod.rs`), spec-writing rules, gotchas, and the full verification command; `_typos.toml` added.
+- **Phase 1 — foundation**: `src/md.rs` (comrak outline; `list`/`status`/`scan` no longer count headings, checkboxes, or `^^^` inside code blocks), `src/output.rs` (global `--format text|json|toon`), `src/config.rs` (`specdev.toml` with defaults), `src/diag.rs`, `src/task.rs` + `src/task/{id,frontmatter,log}.rs` (hand-written flat-YAML frontmatter, log grammar, body kept byte-for-byte).
+- **Phase 2 — commands**: `init` also writes `specdev.toml` and `specs/tasks/done/`; `task new|list|show|index`; generated `specs/tasks/_index.md`.
+- Fixed: `list --stats` `[ ]` column printed the total checkbox count instead of unchecked.
+- Dependencies: runtime tree 23 → 53 crates (comrak, serde, toml, serde_json, toon-format, chrono). 109 unit + 15 e2e tests; clippy `-D warnings` clean.
+
 ## 2026-07-15 — `specdev list` + `list --stats` command
 
 - New `specdev list` command: lists `specs/*.md` with the first Markdown header

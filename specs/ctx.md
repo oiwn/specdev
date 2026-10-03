@@ -1,31 +1,9 @@
-# Current Task Context: Dark Factory design spec
+# Current Task Context: New specdev version and updated workflow
 State: in progress (started 2026-10-02)
 
 ## Plan
 
-Design (done unless noted):
-- [x] Write `specs/factory.md` (multi-stage pipeline design)
-- [x] Add v0.3–v0.6 milestones to `specs/roadmap.md`
-- [x] Point `specs/overview.md` at `specs/factory.md`
-- [x] User reviews `factory.md` and answers its open questions with `^^^`
-- [x] Align `specs/roadmap.md` with `factory.md` (milestones still CI-dispatch / parallel-first; replace with the phases below)
-- [x] Align `specs/overview.md` with `factory.md` (still says the CLI never mutates spec content)
-- [x] Change "Formatting specs" in `skills/SKILL.md` from ≤ 80 columns to soft wraps
-
-Phase 1 — foundation (no new commands):
-- [x] `md` module on `comrak`: parse to AST with source positions (headings, sections, checkboxes, tables, code blocks); move `list`/`status`/`scan` onto it so headings and checkboxes inside code blocks stop being counted
-- [x] `output` module: global `--format text|json|toon`; every command returns a serializable report rendered by format
-- [x] `config` module: load `specdev.toml` with built-in defaults (`Config`)
-- [x] `task` module: `TaskId`, `Status`, `Frontmatter`, `Task`, `LogEntry` types; flat-YAML frontmatter parse/render; `## Log` parse/render; round-trip keeps prose byte-for-byte
-- [x] `diag` module: `Diagnostic` type shared by all checks; exit code 1 on any error
-- [x] Unit tests: frontmatter round-trip, log round-trip, fenced-code edge cases
-
-Phase 2 — `specdev init` + `task new` / `task list` / `task show` / `task index`:
-- [x] `init` also writes `specdev.toml` (write-if-missing) and creates `specs/tasks/` + `specs/tasks/done/`
-- [x] `task new <slug>`: next id, file generated from `[task]` config, status `draft`, `created` today, `## Log` "created"; regenerates `_index.md`
-- [x] `task list`: one line per task (id, status/stage, title), queue order
-- [x] `task show <id>`: frontmatter summary, plan progress, open `^^^`, next-step hint per status/stage
-- [x] `task index`: regenerate `specs/tasks/_index.md`
+Design and Phases 1–2 are done (CHANGELOG.md, 2026-10-03).
 
 Phase 3 — `specdev check`:
 - [ ] Per-task: required fields/sections, enum values, `stage` iff `in-progress`, `blocked_reason` iff `blocked`, id matches filename, `depends` ids exist
