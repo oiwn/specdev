@@ -41,7 +41,7 @@ Loop: verify fail or review changes → fix → verify again.
    - Human reviews the file with `^^^`; agent answers with `&&&`.
    - Next: human approves → agent compresses the resolved `^^^`/`&&&` dialogue into the plan → `ready` (joins the queue). Approval is the explicit compress intent for that task file, so the implementer reads a clean plan, not a transcript. `specdev task advance` refuses `ready` while open `^^^` remain.
 2. **ready** — queued; first in id order is taken when no task is active.
-   - `specdev task advance <id>` → status `in-progress`, stage `implement`; records the approved scope in `## Log`.
+   - `specdev task advance <id>` → status `in-progress`, stage `implement`; refuses if another task is active or no scope was approved (recorded at `draft → ready`).
    - Agent works on whatever branch is checked out. Branches, commits for the PR, and the PR itself are the human's; specdev never writes to git.
 3. **implement** — agent.
    - Codes inside `scope`, ticks Plan boxes.

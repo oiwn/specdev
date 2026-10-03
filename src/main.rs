@@ -2,6 +2,7 @@ use std::path::Path;
 
 use clap::{Parser, Subcommand};
 
+mod check;
 mod config;
 mod diag;
 mod init;
@@ -27,6 +28,8 @@ enum Error {
     Usage(String),
     #[error("{0}")]
     Diagnostic(#[from] diag::Diagnostic),
+    #[error("check failed: {0} error(s)")]
+    CheckFailed(usize),
 }
 
 #[derive(Parser)]
@@ -52,6 +55,8 @@ enum Commands {
     Scan,
     /// Show spec directory health and status
     Status,
+    /// Validate task files, their logs, the task index, and spec rules
+    Check,
     /// List spec files; use --stats for a structural breakdown
     List {
         /// Show per-file heading/checkbox/word stats instead of the simple list
@@ -107,12 +112,9 @@ fn main() {
         Commands::Init => {
             output::require_text("init", format).and_then(|()| init::run())
         }
-        Commands::Scan => {
-            output::require_text("scan", format).and_then(|()| scan::run())
-        }
-        Commands::Status => {
-            output::require_text("status", format).and_then(|()| status::run())
-        }
+        Commands::Scan => scan::run(Path::new(""), format),
+        Commands::Status => status::run(Path::new(""), format),
+        Commands::Check => check::run(Path::new(""), format),
         Commands::List { stats } => list::run(stats, format),
         Commands::Skill { command } => output::require_text("skill", format)
             .and_then(|()| match command {
@@ -159,6 +161,11 @@ mod tests {
     #[test]
     fn parses_status() {
         assert!(matches!(cli(&["status"]).unwrap(), Commands::Status));
+    }
+
+    #[test]
+    fn parses_check() {
+        assert!(matches!(cli(&["check"]).unwrap(), Commands::Check));
     }
 
     #[test]

@@ -4,7 +4,7 @@ specdev is a small Rust CLI plus a bundled agent skill. The CLI scaffolds, inspe
 
 ## Architecture
 
-- `src/main.rs` — clap CLI: `init`, `scan`, `status`, `list`, `skill`, `task`; global `--format text|json|toon`; crate-level `Error`.
+- `src/main.rs` — clap CLI: `init`, `scan`, `status`, `check`, `list`, `skill`, `task`; global `--format text|json|toon`; crate-level `Error`.
 - `src/md.rs` — the shared Markdown parser (comrak): headings, checkboxes, sections, code-block awareness. All Markdown analysis goes through it.
 - `src/diag.rs` — `Diagnostic` (file, line, severity, stable code, message).
 - `src/output.rs` — `Format` and the `Report` trait; renders every migrated command as text, JSON, or TOON.
@@ -14,10 +14,12 @@ specdev is a small Rust CLI plus a bundled agent skill. The CLI scaffolds, inspe
   - `src/task/frontmatter.rs` — hand-written flat-YAML subset parser.
   - `src/task/log.rs` — `## Log` line format.
   - `src/task/store.rs` — `TaskStore`: loads `specs/tasks/` and `done/`, lookup, queue order, `_index.md`.
+  - `src/task/transition.rs` — the legal status/stage moves (`is_legal`) and `## Log` replay.
   - `src/task/cmd.rs` — `task new|list|show|index`.
+- `src/check.rs` — `specdev check`: task contract, log consistency, one active task, index freshness, plus the spec warnings from `status`. Errors exit 1.
 - `src/init.rs` — scaffolds `specs/` + root `CHANGELOG.md`/`AGENTS.md` (AGENTS.md is append-aware, idempotent via `<!-- BEGIN/END specdev -->`).
 - `src/scan.rs` — parses `^^^`/`&&&` remark markers.
-- `src/status.rs` — health: markers, ctx checkbox progress, forbidden content, archive nudge, missing-file warnings.
+- `src/status.rs` — health summary: markers, ctx checkbox progress; `spec_diagnostics` (forbidden ctx content, archive nudge, missing root files) is shared with `check`.
 - `src/list.rs` — `list` and `list --stats`.
 - `src/skill.rs` — installs `skills/SKILL.md` + `references/examples.md`.
 - `skills/SKILL.md` — the shipped agent skill (workflow documentation).
@@ -39,5 +41,5 @@ Direction ("Dark Factory", design in `specs/factory.md`): the CLI owns *structur
 
 - `skills/SKILL.md` and `references/examples.md` are embedded via `include_str!` (`src/skill.rs`); editing them changes the installed skill on reinstall.
 - `AGENTS.md` injection is the only append-aware path in `init`; all other files are write-if-missing.
-- `init`, `scan`, `status`, and `skill` are still text-only; `--format json|toon` on them errors (`output::require_text`). `scan` and `status` migrate to `Report` in Phase 3.
+- `init` and `skill` are still text-only; `--format json|toon` on them errors (`output::require_text`).
 - This repo dogfoods its own `specs/`.

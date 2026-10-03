@@ -3,143 +3,225 @@ use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
 
+use serde::Serialize;
+
 use crate::Error;
+use crate::diag::Diagnostic;
 use crate::md;
+use crate::output::{self, Format, Report};
 use crate::scan;
 
-pub fn run() -> Result<(), Error> {
-    let specs_dir = Path::new("specs");
-    let root = Path::new(".");
+const CORE_FILES: [&str; 4] = ["overview.md", "ctx.md", "roadmap.md", "ideas.md"];
+
+pub fn run(root: &Path, format: Format) -> Result<(), Error> {
+    let specs_dir = root.join("specs");
     if !specs_dir.exists() {
         eprintln!("No specs/ directory found. Run `specdev init` first.");
         return Ok(());
     }
 
-    // Load ctx.md once for step-progress + forbidden-content checks.
-    let ctx_path = specs_dir.join("ctx.md");
-    let ctx_content = if ctx_path.exists() {
-        fs::read_to_string(&ctx_path).ok()
-    } else {
-        None
-    };
-    let ctx_steps = ctx_content.as_ref().map(|c| count_checkboxes(c));
-
-    let core_files = ["overview.md", "ctx.md", "roadmap.md", "ideas.md"];
-    let mut total_open = 0;
-    let mut total_resolved = 0;
-
-    println!("Core spec files:");
-    for name in &core_files {
+    let mut report = StatusReport::default();
+    for name in CORE_FILES {
         let path = specs_dir.join(name);
-        if path.exists() {
-            let meta = fs::metadata(&path)?;
-            let content = fs::read_to_string(&path)?;
-            let lines = content.lines().count();
-            let (open, resolved) = scan::count_markers(&content);
-            total_open += open;
-            total_resolved += resolved;
-            let age = format_age(meta.modified()?);
-            let markers = open + resolved;
-            if markers > 0 {
-                println!(
-                    "  [OK] {:<14} {:>4} lines  {:<10} {} markers ({} open)",
-                    name, lines, age, markers, open
-                );
-            } else {
-                println!("  [OK] {:<14} {:>4} lines  {:<10}", name, lines, age);
-            }
-            if *name == "ctx.md"
-                && let Some((done, total)) = ctx_steps
-                && total > 0
-            {
-                println!("       task progress: {}/{} steps done", done, total);
-            }
-        } else {
-            println!("  [--] {:<14} missing", name);
+        if !path.exists() {
+            report.core.push(CoreFile {
+                name,
+                present: false,
+                lines: 0,
+                age: None,
+                markers: 0,
+                open: 0,
+                steps: None,
+            });
+            continue;
         }
+        let content = fs::read_to_string(&path)?;
+        let (open, resolved) = scan::count_markers(&content);
+        report.open += open;
+        report.resolved += resolved;
+        let steps = (name == "ctx.md")
+            .then(|| count_checkboxes(&content))
+            .filter(|&(_, total)| total > 0)
+            .map(|(done, total)| Steps { done, total });
+        report.core.push(CoreFile {
+            name,
+            present: true,
+            lines: content.lines().count(),
+            age: Some(format_age(fs::metadata(&path)?.modified()?)),
+            markers: open + resolved,
+            open,
+            steps,
+        });
     }
 
     let mut extra: Vec<String> = Vec::new();
-    for entry in fs::read_dir(specs_dir)? {
-        let entry = entry?;
-        let fname = entry.file_name().to_string_lossy().to_string();
-        if fname.ends_with(".md") && !core_files.contains(&fname.as_str()) {
+    for entry in fs::read_dir(&specs_dir)? {
+        let fname = entry?.file_name().to_string_lossy().to_string();
+        if fname.ends_with(".md") && !CORE_FILES.contains(&fname.as_str()) {
             extra.push(fname);
         }
     }
-
-    if !extra.is_empty() {
-        extra.sort();
-        println!("\nAdditional specs:");
-        for name in &extra {
-            let path = specs_dir.join(name);
-            let content = fs::read_to_string(&path)?;
-            let lines = content.lines().count();
-            let (open, resolved) = scan::count_markers(&content);
-            total_open += open;
-            total_resolved += resolved;
-            let markers = open + resolved;
-            if markers > 0 {
-                println!(
-                    "  {:<15} {:>4} lines  {} markers ({} open)",
-                    name, lines, markers, open
-                );
-            } else {
-                println!("  {:<15} {:>4} lines", name, lines);
-            }
-        }
+    extra.sort();
+    for name in extra {
+        let content = fs::read_to_string(specs_dir.join(&name))?;
+        let (open, resolved) = scan::count_markers(&content);
+        report.open += open;
+        report.resolved += resolved;
+        report.extra.push(ExtraFile {
+            lines: content.lines().count(),
+            markers: open + resolved,
+            open,
+            name,
+        });
     }
 
-    println!(
-        "\nMarkers: {} open, {} resolved",
-        total_open, total_resolved
-    );
-
-    let warnings = collect_warnings(&ctx_content, ctx_steps, root);
-    if !warnings.is_empty() {
-        println!("\nWarnings:");
-        for w in &warnings {
-            println!("  - {w}");
-        }
-    }
-
-    Ok(())
+    report.warnings = spec_diagnostics(root)?;
+    output::emit(&report, format)
 }
 
-fn collect_warnings(
-    ctx_content: &Option<String>,
-    ctx_steps: Option<(usize, usize)>,
-    root: &Path,
-) -> Vec<String> {
-    let mut warnings = Vec::new();
+/// Spec-level warnings shared by `status` and `check`: `ctx.md` content that
+/// belongs elsewhere, a finished-looking `ctx.md`, missing root files.
+pub fn spec_diagnostics(root: &Path) -> Result<Vec<Diagnostic>, Error> {
+    let ctx_path = root.join("specs").join("ctx.md");
+    let mut diags = if ctx_path.exists() {
+        ctx_diagnostics(&ctx_path, &fs::read_to_string(&ctx_path)?)
+    } else {
+        Vec::new()
+    };
+    diags.extend(root_file_diagnostics(root));
+    Ok(diags)
+}
 
-    if let Some(content) = ctx_content {
-        if let Some((done, total)) = ctx_steps
-            && total > 0
-            && done == total
-            && !content.trim().is_empty()
-        {
-            warnings.push(format!(
-                "ctx.md: all {total} plan steps are checked. Confirm with the user that the whole task is done before archiving."
-            ));
-        }
-        let forbidden = unique_preserve(find_forbidden(content));
-        for f in forbidden {
-            warnings.push(format!(
-                "ctx.md: forbidden content ({f}) — route it to its home file (see AGENTS.md)."
-            ));
-        }
+fn ctx_diagnostics(path: &Path, content: &str) -> Vec<Diagnostic> {
+    let mut diags = Vec::new();
+    let (done, total) = count_checkboxes(content);
+    if total > 0 && done == total {
+        diags.push(Diagnostic::warning(
+            path,
+            None,
+            "ctx-all-done",
+            format!(
+                "all {total} plan steps are checked. Confirm with the user that the whole task is done before archiving."
+            ),
+        ));
     }
-
-    for root_file in ["CHANGELOG.md", "AGENTS.md"] {
-        if !root.join(root_file).exists() {
-            warnings.push(format!(
-                "{root_file} missing at project root — run `specdev init` to add it."
-            ));
-        }
+    for f in find_forbidden(content) {
+        diags.push(Diagnostic::warning(
+            path,
+            None,
+            "ctx-forbidden",
+            format!(
+                "forbidden content ({f}) — route it to its home file (see AGENTS.md)."
+            ),
+        ));
     }
+    diags
+}
 
-    warnings
+fn root_file_diagnostics(root: &Path) -> Vec<Diagnostic> {
+    ["CHANGELOG.md", "AGENTS.md"]
+        .into_iter()
+        .map(|name| root.join(name))
+        .filter(|path| !path.exists())
+        .map(|path| {
+            Diagnostic::warning(
+                path,
+                None,
+                "root-file-missing",
+                "missing at project root — run `specdev init` to add it.",
+            )
+        })
+        .collect()
+}
+
+#[derive(Serialize, Default)]
+struct StatusReport {
+    core: Vec<CoreFile>,
+    extra: Vec<ExtraFile>,
+    open: usize,
+    resolved: usize,
+    warnings: Vec<Diagnostic>,
+}
+
+#[derive(Serialize)]
+struct CoreFile {
+    name: &'static str,
+    present: bool,
+    lines: usize,
+    age: Option<String>,
+    markers: usize,
+    open: usize,
+    /// `ctx.md` only: checked plan steps.
+    steps: Option<Steps>,
+}
+
+#[derive(Serialize)]
+struct ExtraFile {
+    name: String,
+    lines: usize,
+    markers: usize,
+    open: usize,
+}
+
+#[derive(Serialize)]
+struct Steps {
+    done: usize,
+    total: usize,
+}
+
+impl Report for StatusReport {
+    fn text(&self) -> String {
+        let mut out = vec!["Core spec files:".to_string()];
+        for f in &self.core {
+            if !f.present {
+                out.push(format!("  [--] {:<14} missing", f.name));
+                continue;
+            }
+            let age = f.age.as_deref().unwrap_or("");
+            if f.markers > 0 {
+                out.push(format!(
+                    "  [OK] {:<14} {:>4} lines  {:<10} {} markers ({} open)",
+                    f.name, f.lines, age, f.markers, f.open
+                ));
+            } else {
+                out.push(format!(
+                    "  [OK] {:<14} {:>4} lines  {:<10}",
+                    f.name, f.lines, age
+                ));
+            }
+            if let Some(steps) = &f.steps {
+                out.push(format!(
+                    "       task progress: {}/{} steps done",
+                    steps.done, steps.total
+                ));
+            }
+        }
+        if !self.extra.is_empty() {
+            out.push("\nAdditional specs:".to_string());
+            for f in &self.extra {
+                if f.markers > 0 {
+                    out.push(format!(
+                        "  {:<15} {:>4} lines  {} markers ({} open)",
+                        f.name, f.lines, f.markers, f.open
+                    ));
+                } else {
+                    out.push(format!("  {:<15} {:>4} lines", f.name, f.lines));
+                }
+            }
+        }
+        out.push(format!(
+            "\nMarkers: {} open, {} resolved",
+            self.open, self.resolved
+        ));
+        if !self.warnings.is_empty() {
+            out.push("\nWarnings:".to_string());
+            for w in &self.warnings {
+                let file = w.file.file_name().unwrap_or_default().to_string_lossy();
+                out.push(format!("  - {file}: {}", w.message));
+            }
+        }
+        out.join("\n")
+    }
 }
 
 /// Count Markdown task checkboxes, ignoring code blocks. Returns (checked, total).
@@ -314,6 +396,13 @@ do two
         assert!(find_forbidden(content).is_empty());
     }
 
+    fn ctx_codes(content: &str) -> Vec<&'static str> {
+        ctx_diagnostics(Path::new("specs/ctx.md"), content)
+            .iter()
+            .map(|d| d.code)
+            .collect()
+    }
+
     #[test]
     fn archive_warning_when_all_done() {
         let content = "\
@@ -324,16 +413,7 @@ do two
 ## Next
 nothing
 ";
-        let steps = count_checkboxes(content);
-        let warnings = collect_warnings(
-            &Some(content.to_string()),
-            Some(steps),
-            Path::new("."),
-        );
-        assert!(
-            warnings.iter().any(|w| w.contains("Confirm with the user")),
-            "got {warnings:?}"
-        );
+        assert_eq!(ctx_codes(content), ["ctx-all-done"]);
     }
 
     #[test]
@@ -344,25 +424,16 @@ nothing
 - [x] one
 - [ ] two
 ";
-        let steps = count_checkboxes(content);
-        let warnings = collect_warnings(
-            &Some(content.to_string()),
-            Some(steps),
-            Path::new("."),
-        );
-        assert!(
-            !warnings.iter().any(|w| w.contains("Archive the task")),
-            "got {warnings:?}"
-        );
+        assert!(ctx_codes(content).is_empty());
     }
 
     #[test]
     fn missing_root_file_warning() {
-        let tmp = std::env::temp_dir();
-        let warnings = collect_warnings(&None, None, &tmp);
-        assert!(
-            warnings.iter().any(|w| w.contains("CHANGELOG.md missing")),
-            "got {warnings:?}"
-        );
+        let tmp = tempfile::TempDir::new().unwrap();
+        fs::write(tmp.path().join("AGENTS.md"), "").unwrap();
+        let diags = root_file_diagnostics(tmp.path());
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].file.ends_with("CHANGELOG.md"), "got {diags:?}");
+        assert_eq!(diags[0].code, "root-file-missing");
     }
 }

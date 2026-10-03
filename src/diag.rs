@@ -38,9 +38,22 @@ impl Diagnostic {
         }
     }
 
+    pub fn warning(
+        file: impl Into<PathBuf>,
+        line: Option<usize>,
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::error(file, line, code, message).into_warning()
+    }
+
     /// The same diagnostic, downgraded to a warning.
-    pub fn into_warning(mut self) -> Self {
-        self.severity = Severity::Warning;
+    pub fn into_warning(self) -> Self {
+        self.with_severity(Severity::Warning)
+    }
+
+    pub fn with_severity(mut self, severity: Severity) -> Self {
+        self.severity = severity;
         self
     }
 }

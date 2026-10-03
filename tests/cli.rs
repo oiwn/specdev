@@ -243,9 +243,38 @@ fn task_output_formats() {
 #[test]
 fn unmigrated_commands_reject_structured_formats() {
     let tmp = init_tmp();
-    let (_, err, code) = run(tmp.path(), &["scan", "--format", "json"]);
+    let (_, err, code) = run(tmp.path(), &["init", "--format", "json"]);
     assert_eq!(code, 1);
     assert!(err.contains("does not support --format"), "got {err}");
+}
+
+#[test]
+fn scan_and_status_support_structured_formats() {
+    let tmp = init_tmp();
+    fs::write(tmp.path().join("specs/ideas.md"), "^^^ open\n").unwrap();
+
+    let (out, err, code) = run(tmp.path(), &["--format", "json", "scan"]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(json["open"], 1);
+    assert!(
+        json["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["path"] == "ideas.md")
+    );
+
+    let (out, err, code) = run(tmp.path(), &["--format", "json", "status"]);
+    assert_eq!(code, 0, "stderr: {err}");
+    let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(json["open"], 1);
+    assert_eq!(json["core"][0]["name"], "overview.md");
+    assert!(json["warnings"].is_array());
+
+    let (out, _, code) = run(tmp.path(), &["--format", "toon", "scan"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("open: 1"), "got {out}");
 }
 
 #[test]
@@ -451,9 +480,93 @@ fn status_reports_warnings() {
         "Markers: 1 open, 0 resolved",
         "all 2 plan steps are checked",
         "forbidden content (Gotchas/Quirks block)",
-        "CHANGELOG.md missing at project root",
+        "CHANGELOG.md: missing at project root",
     ] {
         assert!(out.contains(want), "expected {want:?}, got {out}");
     }
     assert!(!out.contains("Deferred section"), "got {out}");
+}
+
+/// A valid task, as the Phase 4 commands would leave it, at `ready`.
+fn ready_task(id: &str) -> String {
+    let title = id.split_once('-').unwrap().1;
+    format!(
+        "---\nid: {id}\nstatus: ready\nscope: [src/a.rs]\ncreated: 2026-10-03\n---\n# Task: {title}\n\n## Plan\n\n- [ ] do it\n\n## Acceptance\n\n- [ ] cargo test\n\n## Log\n\n- 2026-10-03 created: {title}\n- 2026-10-03 advance draft → ready\n- 2026-10-03 scope approved: src/a.rs\n"
+    )
+}
+
+/// `ready_task` advanced to in-progress/implement.
+fn active_task(id: &str) -> String {
+    format!(
+        "{}- 2026-10-04 advance ready → in-progress/implement\n",
+        ready_task(id)
+    )
+    .replace("status: ready", "status: in-progress\nstage: implement")
+}
+
+#[test]
+fn check_fresh_project_and_new_task() {
+    let tmp = init_tmp();
+    let (out, err, code) = run(tmp.path(), &["check"]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert_eq!(out, "OK\n");
+
+    run(tmp.path(), &["task", "new", "x"]);
+    let (out, err, code) = run(tmp.path(), &["check"]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert!(out.contains("warning[scope-empty]"), "got {out}");
+    assert!(out.contains("0 errors, 3 warnings"), "got {out}");
+}
+
+#[test]
+fn check_catches_hand_edited_state() {
+    let tmp = init_tmp();
+    run(tmp.path(), &["task", "new", "x"]);
+    let path = tmp.path().join("specs/tasks/0001-x.md");
+    let content = fs::read_to_string(&path).unwrap();
+    fs::write(&path, content.replace("status: draft", "status: ready")).unwrap();
+
+    let (out, err, code) = run(tmp.path(), &["check"]);
+    assert_eq!(code, 1);
+    assert!(
+        out.contains("0001-x.md: error[log-mismatch]: frontmatter status is `ready` but the log replays to `draft`"),
+        "got {out}"
+    );
+    assert!(err.contains("check failed"), "got {err}");
+}
+
+#[test]
+fn check_valid_task_passes_and_repo_rules_fail() {
+    let tmp = init_tmp();
+    fs::create_dir(tmp.path().join("src")).unwrap();
+    let tasks = tmp.path().join("specs/tasks");
+    fs::write(tasks.join("0001-a.md"), ready_task("0001-a")).unwrap();
+    run(tmp.path(), &["task", "index"]);
+    let (out, err, code) = run(tmp.path(), &["check"]);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert_eq!(out, "OK\n");
+
+    fs::write(tasks.join("0001-a.md"), active_task("0001-a")).unwrap();
+    fs::write(tasks.join("0002-b.md"), active_task("0002-b")).unwrap();
+    fs::remove_file(tasks.join("_index.md")).unwrap();
+    let (out, _, code) = run(tmp.path(), &["--format", "json", "check"]);
+    assert_eq!(code, 1);
+    let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(json["errors"], 3, "got {out}");
+    assert_eq!(json["warnings"], 0, "got {out}");
+    let codes: Vec<&str> = json["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(codes, ["active-tasks", "active-tasks", "index-stale"]);
+}
+
+#[test]
+fn check_without_specs_dir_fails() {
+    let tmp = TempDir::new().unwrap();
+    let (_, err, code) = run(tmp.path(), &["check"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("specdev init"), "got {err}");
 }

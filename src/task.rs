@@ -7,6 +7,7 @@ mod frontmatter;
 mod id;
 mod log;
 mod store;
+pub mod transition;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ use crate::md;
 pub use frontmatter::Frontmatter;
 pub use id::{TaskId, validate_slug};
 pub use log::{LogEntry, LogEvent};
+pub use store::{INDEX_FILE, TASKS_DIR, TaskStore};
 
 /// Defines a hardcoded string enum with `as_str`, `FromStr`, `Display`, and
 /// kebab-case serialization.

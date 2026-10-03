@@ -6,13 +6,13 @@ State: in progress (started 2026-10-02)
 Design and Phases 1–2 are done (CHANGELOG.md, 2026-10-03).
 
 Phase 3 — `specdev check`:
-- [ ] Transition table in one place (`task::transition`) plus log replay; used by `check` now and by `advance` in Phase 4
-- [ ] Per-task: required fields/sections, enum values, `stage` iff `in-progress`, `blocked_reason` iff `blocked`, id matches filename, `depends` ids exist, `## Acceptance` not empty
-- [ ] Scope lint: non-empty, no bare `**`, paths exist or are plausibly new (parent dir exists); no glob matching yet
-- [ ] Log consistency: frontmatter equals state replayed from `## Log`; every logged transition legal; `scope` = approved + logged expansions
-- [ ] Repo-wide: at most one active task; `_index.md` matches generated output; broken task files reported
-- [ ] Fold existing `status` warnings (ctx forbidden content, archive nudge) into `check`; warn when `ctx.md` points at a non-active task; `status` keeps its summary view
-- [ ] Migrate `scan` and `status` to `Report` so `--format json|toon` works on them
+- [x] Transition table in one place (`task::transition`) plus log replay; used by `check` now and by `advance` in Phase 4
+- [x] Per-task: required fields/sections, enum values, `stage` iff `in-progress`, `blocked_reason` iff `blocked`, id matches filename, `depends` ids exist, `## Acceptance` not empty
+- [x] Scope lint: non-empty, no bare `**`, paths exist or are plausibly new (parent dir exists); no glob matching yet
+- [x] Log consistency: frontmatter equals state replayed from `## Log`; every logged transition legal; `scope` = approved + logged expansions
+- [x] Repo-wide: at most one active task; `_index.md` matches generated output; broken task files reported
+- [x] Fold existing `status` warnings (ctx forbidden content, archive nudge) into `check`; warn when `ctx.md` points at a non-active task; `status` keeps its summary view
+- [x] Migrate `scan` and `status` to `Report` so `--format json|toon` works on them
 
 Phase 4 — state commands: `task advance` / `task block` / `task set` / `task scope`:
 - [ ] `advance`: legal moves only (uses the Phase 3 transition table); `draft → ready` refuses open `^^^` and records approved scope; `ready → in-progress` refuses if another task is active; `→ fix` bumps `attempts`; cap → `blocked`
@@ -116,6 +116,13 @@ Log location: per task — a `## Log` section at the end of each `specs/tasks/<i
 - Dependency tree (runtime, unique crates; 2026-10-03): 23 → 53 after adding the Phase 1–2 set. Per-crate subtrees, overlapping: `comrak` 0.55 (defaults off) 12 — caseless, finl_unicode, jetscii, phf ×3, rustc-hash, smallvec, tinyvec, typed-arena, unicode-normalization; `toon-format` 0.5 (defaults off) 17, but all shared (serde, serde_json, indexmap, thiserror); `serde_json` 8; `toml` 1.x 7; `serde` derive 7 (syn/quote/proc-macro2 already came with thiserror); `chrono` 0.4 (clock, std) 4 — iana-time-zone + core-foundation-sys on macOS (Windows gets windows-* instead). `glob` deferred to Phase 5 (only scope-vs-changed-files matching needs it).
 - Phases 1–2 landed 2026-10-03; gate green (109 unit + 15 e2e tests, clippy `-D warnings`). Layout: `src/{md,diag,output,config}.rs`, `src/task.rs` + `src/task/{id,frontmatter,log,store,cmd}.rs`.
 - E2e coverage gaps closed 2026-10-04 (15 → 21 tests in `tests/cli.rs`): `task index`, `skill install`/`skill check` (run with `HOME` set to a tempdir via `run_env`, so tests never touch the real `~/.agents/`), and behavioral `scan`/`status` tests (markers, forbidden content, missing root files). `status` assertions pin today's exit-0-with-warnings behavior; Phase 3 changes them deliberately.
+- Phase 3 landed 2026-10-04; gate green (126 unit + 26 e2e). New: `src/check.rs`, `src/task/transition.rs`; `scan`/`status` emit reports. No new crates.
+- Transition table (`transition::is_legal`): draft ⇄ ready; ready → implement; implement → verify; verify → review | fix; review → fix | approval; fix → verify; approval → fix | done; blocked → draft | ready | any stage. Blocking is the `Blocked` log event, legal from any status but done/blocked.
+- Replay rules: `created` first (title and date must match frontmatter); `scope approved` only while ready, required before ready → in-progress; `ready → draft` drops the approval; scope add/rm count only after approval (draft scope is free); `set` events are informational — `source`/`depends` aren't compared yet.
+- `check` codes: `frontmatter`/`title`/`log` (parse), `id-filename`, `stage`, `blocked-reason`, `done-status`, `section-missing`, `depends`, `scope-empty`, `plan-empty`, `acceptance-empty`, `scope-glob`, `scope-path` (warning), `log-missing`, `log-created`, `log-title`, `log-transition`, `log-attempts`, `log-scope`, `log-mismatch`, `active-tasks`, `index-stale`, `ctx-all-done`, `ctx-forbidden`, `root-file-missing`, `ctx-task-inactive` (warnings).
+- Completeness (`scope-empty`, `plan-empty`, `acceptance-empty`) is a warning in draft and blocked, an error otherwise (user decision 2026-10-04). A missing `_index.md` is fine while there are no tasks (`init` doesn't write one).
+- Log diagnostics have no line numbers: `LogEntry` doesn't keep its source line. Follow-up if agents need them.
+- `status` warning lines now read `<file>: <message>` (was ad-hoc text); the `CHANGELOG.md missing` e2e assertion changed accordingly.
 - comrak counts `1. [x]` as a task item (GFM); `md` counts only bullet-list task items to keep the existing semantics.
 - Fixed in passing: `list --stats` `[ ]` column printed the total checkbox count; it now prints unchecked.
 - `scan`, `status`, `init`, `skill` are still text-only; `--format json|toon` on them exits 1 with "does not support --format … yet" until they migrate (Phase 3 for scan/status).
@@ -136,4 +143,4 @@ Log location: per task — a `## Log` section at the end of each `specs/tasks/<i
 - `factory.md` has no open design questions (2026-10-03); quality thresholds start as placeholders and get tuned in Phase 8 dogfooding.
 
 ## Next
-User review of Phases 1–2 (try `specdev task new|list|show|index` in a scratch dir) and commit the pending design pivot (no `task verify`; specdev runs no project commands). Then Phase 3 — `specdev check`, starting with the transition table (pulled forward from Phase 4: log replay needs it). Plan reordered 2026-10-03.
+User review of Phase 3 (`specdev check` in a scratch dir: `task new`, hand-break the file, `check`). Then Phase 4 — state commands on top of `transition::is_legal`; they must produce logs that `transition::replay` accepts (add a round-trip test: command sequence → `check` passes).

@@ -1,73 +1,86 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::Error;
 use crate::md;
+use crate::output::{self, Format, Report};
 
+#[derive(Serialize)]
 pub struct Remark {
     pub line: usize,
     pub text: String,
     pub resolved: bool,
 }
 
+#[derive(Serialize)]
 pub struct FileRemarks {
     pub path: PathBuf,
     pub remarks: Vec<Remark>,
 }
 
-pub fn run() -> Result<(), Error> {
-    let specs_dir = Path::new("specs");
+pub fn run(root: &Path, format: Format) -> Result<(), Error> {
+    let specs_dir = root.join("specs");
     if !specs_dir.exists() {
         eprintln!("No specs/ directory found. Run `specdev init` first.");
         return Ok(());
     }
 
-    let files = collect_spec_files(specs_dir)?;
-    if files.is_empty() {
-        println!("No spec files found in specs/");
-        return Ok(());
-    }
-
-    let mut all_results: Vec<FileRemarks> = Vec::new();
-
-    for path in &files {
-        let content = fs::read_to_string(path)?;
-        let remarks = parse_remarks(&content);
-        all_results.push(FileRemarks {
-            path: path.strip_prefix("specs/").unwrap_or(path).to_path_buf(),
+    let mut report = ScanReport {
+        files: Vec::new(),
+        open: 0,
+        resolved: 0,
+    };
+    for path in collect_spec_files(&specs_dir)? {
+        let remarks = parse_remarks(&fs::read_to_string(&path)?);
+        for r in &remarks {
+            if r.resolved {
+                report.resolved += 1;
+            } else {
+                report.open += 1;
+            }
+        }
+        report.files.push(FileRemarks {
+            path: path.strip_prefix(&specs_dir).unwrap_or(&path).to_path_buf(),
             remarks,
         });
     }
+    output::emit(&report, format)
+}
 
-    let mut total_open = 0;
-    let mut total_resolved = 0;
+#[derive(Serialize)]
+struct ScanReport {
+    files: Vec<FileRemarks>,
+    open: usize,
+    resolved: usize,
+}
 
-    for fr in &all_results {
-        println!("{}", fr.path.display());
-        if fr.remarks.is_empty() {
-            println!("  (no markers)");
-            continue;
+impl Report for ScanReport {
+    fn text(&self) -> String {
+        if self.files.is_empty() {
+            return "No spec files found in specs/".to_string();
         }
-        for r in &fr.remarks {
-            let status = if r.resolved { "resolved" } else { "open" };
-            println!("  L{:>3}  [{:>8}]  {}", r.line, status, r.text);
-            if r.resolved {
-                total_resolved += 1;
-            } else {
-                total_open += 1;
+        let mut out = Vec::new();
+        for fr in &self.files {
+            out.push(fr.path.display().to_string());
+            if fr.remarks.is_empty() {
+                out.push("  (no markers)".to_string());
+            }
+            for r in &fr.remarks {
+                let status = if r.resolved { "resolved" } else { "open" };
+                out.push(format!("  L{:>3}  [{:>8}]  {}", r.line, status, r.text));
             }
         }
+        out.push(String::new());
+        out.push(format!(
+            "Total: {} open, {} resolved across {} files",
+            self.open,
+            self.resolved,
+            self.files.len()
+        ));
+        out.join("\n")
     }
-
-    println!();
-    println!(
-        "Total: {} open, {} resolved across {} files",
-        total_open,
-        total_resolved,
-        all_results.len()
-    );
-
-    Ok(())
 }
 
 pub fn count_markers(content: &str) -> (usize, usize) {

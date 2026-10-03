@@ -25,7 +25,7 @@ extra_fields = []
 max_attempts = 3
 
 [acceptance]
-# Commands `specdev task verify` runs for every task, e.g. ["cargo test"].
+# Acceptance items every task gets, e.g. ["cargo test"]. specdev never runs them.
 default = []
 
 [quality.task]
