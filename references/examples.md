@@ -39,20 +39,9 @@ The API gateway routes requests to microservices.
 ^^^ Not sure about microservices — is this project big enough?
 ```
 
-**After** (agent needs more input):
-
-```md
-## Architecture
-
-The API gateway routes requests to microservices.
-
-^^^ Not sure about microservices — is this project big enough?
-&&& Clarification needed: what is the expected scale? If this serves fewer
-than 10k requests/day, a monolith with clear module boundaries may be
-simpler. Should I draft both options?
-```
-
-The `^^^` stays because the question is not fully resolved yet.
+**While waiting:** Leave the spec unchanged and ask the user in conversation
+what scale they expect. The remark remains unresolved, so do not add an
+`&&&` answer yet.
 
 ## Example 3: Compression
 
@@ -161,7 +150,7 @@ v1.9 (calendar/daily-digest page) remains separately unstarted.
 `specs/ctx.md` (only the current task, as a checkbox plan):
 
 ```md
-# Task: portal overview page (v1)
+# Current Task Context: portal overview page (v1)
 State: in progress
 
 ## Plan

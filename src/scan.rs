@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::Error;
+use crate::md;
 
 pub struct Remark {
     pub line: usize,
@@ -77,10 +78,14 @@ pub fn count_markers(content: &str) -> (usize, usize) {
 }
 
 pub fn parse_remarks(content: &str) -> Vec<Remark> {
+    let outline = md::outline(content);
     let mut remarks = Vec::new();
     let mut pending_idx: Option<usize> = None;
 
     for (i, line) in content.lines().enumerate() {
+        if outline.is_in_code(i + 1) {
+            continue;
+        }
         let trimmed = line.trim();
         if trimmed.starts_with("^^^") {
             let text = trimmed.strip_prefix("^^^").unwrap().trim().to_string();
@@ -116,6 +121,16 @@ fn collect_spec_files(dir: &Path) -> Result<Vec<PathBuf>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markers_inside_code_blocks_are_ignored() {
+        let content =
+            "```\n^^^ example remark\n&&& example answer\n```\n^^^ real\n";
+        let remarks = parse_remarks(content);
+        assert_eq!(remarks.len(), 1);
+        assert_eq!(remarks[0].text, "real");
+        assert_eq!(remarks[0].line, 5);
+    }
 
     #[test]
     fn no_markers() {

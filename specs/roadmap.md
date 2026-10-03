@@ -1,35 +1,30 @@
 # Roadmap
 
-Dark Factory track — design in `specs/factory.md`.
+Dark Factory track — design in `specs/factory.md`; build phases and their steps in `specs/ctx.md`.
 
-## v0.3 — Task protocol
+## v0.3 — Task files (Phases 1–2)
 
-- `specs/tasks/<id>.md` format (frontmatter: status, touches, reads, depends,
-  branch, claimed_by) + `specs/tasks/done/`.
-- Skill section for the planner and worker roles, incl. hot-file discipline.
-- `specdev task new|list|show`; task board summary in `specdev status`.
+- Foundation: comrak-backed Markdown outline, `specdev.toml` config, task types with flat-YAML frontmatter and per-task `## Log`, `--format text|json|toon`.
+- `init` scaffolds `specdev.toml` and `specs/tasks/`; `task new|list|show|index`.
 
-## v0.4 — Planner check
+## v0.4 — Contract enforcement (Phases 3–4)
 
-- `specdev plan --check`: pairwise `touches` glob overlap, dependency cycles,
-  ready tasks with unmet deps; prints proposed waves.
+- `specdev check`: task contract, log consistency, one active task, generated index.
+- State commands: `task advance|block|set|scope` with one transition table.
 
-## v0.5 — Scope guard
+## v0.5 — Verify, archive, quality (Phases 5–7)
 
-- `specdev task verify <id> --diff <base>`: PR diff ⊆ `touches` + own task file.
-- Reusable CI step that runs it plus the task's acceptance commands.
+- `task verify` (Acceptance commands + scope check via the `git` CLI, read-only) and `check --staged` for pre-commit.
+- `task done`: archive to `done/`, changelog entry, index.
+- Quality gate metrics and thresholds; `specdev fmt` for soft-wrapped specs.
 
-## v0.6 — opencode dispatch
+## v0.6 — Skill and docs (Phase 8)
 
-- Dispatcher workflow (`workflow_dispatch` + `schedule`, single concurrency
-  group): claim up to N non-overlapping ready tasks via commit to main, hand
-  each to opencode.
+- Skill rewritten around the staged task workflow; README, overview, examples; dogfood on real specdev tasks.
 
 ## Later
 
-- **Autonomous planner loop (L3)**: planner picks roadmap items and drafts
-  tasks without prompting; humans gate only promotion and merge.
-- **Merge queue / auto-rebase** for task PRs that go stale against main.
+- **Parallel tasks**: non-overlapping `scope`, `specdev plan` computing waves for an external orchestrator (see "Future: parallel execution" in `factory.md`).
 
 - **Scan improvements**: surface ctx checkbox progress inside `scan` too, and
   group `^^^` remarks by file with a one-line health summary.

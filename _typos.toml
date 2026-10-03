@@ -1,0 +1,3 @@
+[default.extend-words]
+# Rust TUI crate (a dependency of toon-format's CLI feature), not a typo.
+ratatui = "ratatui"

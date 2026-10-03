@@ -4,6 +4,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use crate::Error;
+use crate::md;
 use crate::scan;
 
 pub fn run() -> Result<(), Error> {
@@ -141,46 +142,32 @@ fn collect_warnings(
     warnings
 }
 
-/// Count Markdown task checkboxes. Returns (checked, total).
+/// Count Markdown task checkboxes, ignoring code blocks. Returns (checked, total).
 pub fn count_checkboxes(content: &str) -> (usize, usize) {
-    let mut done = 0;
-    let mut total = 0;
-    for line in content.lines() {
-        let t = line.trim_start();
-        if let Some(rest) = t.strip_prefix("- [") {
-            let mut chars = rest.chars();
-            if let (Some(marker), Some(after)) = (chars.next(), chars.next())
-                && after == ']'
-            {
-                total += 1;
-                if marker == 'x' || marker == 'X' {
-                    done += 1;
-                }
-            }
-        }
-    }
-    (done, total)
+    md::outline(content).checkbox_counts()
 }
 
 /// Detect content forbidden in ctx.md (it belongs in another spec file).
-/// Returns human-readable labels of what was found.
+/// Returns human-readable labels of what was found. Code blocks are ignored.
 pub fn find_forbidden(content: &str) -> Vec<String> {
+    let outline = md::outline(content);
     let mut found = Vec::new();
-    for line in content.lines() {
-        let lower = line.trim().to_lowercase();
-        if line.trim_start().starts_with('#') {
-            let heading = lower.trim_start_matches('#').trim();
-            if heading.contains("deferred") {
-                found.push("Deferred section".to_string());
-            }
-            if heading.contains("gotchas") || heading.contains("quirks") {
-                found.push("Gotchas/Quirks block".to_string());
-            }
-            if heading.contains("roadmap") {
-                found.push("Roadmap content".to_string());
-            }
+    for h in &outline.headings {
+        let heading = h.text.to_lowercase();
+        if heading.contains("deferred") {
+            found.push("Deferred section".to_string());
         }
-        if line_starts_with(&lower, "roadmap pointer") {
+        if heading.contains("gotchas") || heading.contains("quirks") {
+            found.push("Gotchas/Quirks block".to_string());
+        }
+        if heading.contains("roadmap") {
+            found.push("Roadmap content".to_string());
+        }
+    }
+    for (i, line) in content.lines().enumerate() {
+        if !outline.is_in_code(i + 1)
+            && line_starts_with(&line.trim().to_lowercase(), "roadmap pointer")
+        {
             found.push("Roadmap pointer".to_string());
         }
     }

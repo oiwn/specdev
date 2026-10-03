@@ -55,18 +55,20 @@ Content is routed by *when* it lives. This is what keeps `ctx.md` clean and is
 the main fix for agents that leave stale scope, deferred items, and gotchas
 piling up in the current task.
 
-| Content                                   | Home                          |
-|-------------------------------------------|-------------------------------|
-| The current task + its checkbox plan      | `specs/ctx.md`                |
-| A task whose checkboxes are all done      | `CHANGELOG.md` (move it here) |
-| Committed future direction                | `specs/roadmap.md`            |
-| Noted but not-now ideas                   | `specs/ideas.md`              |
-| Architecture, data flow, durable knowledge| `specs/overview.md`           |
-| Gotchas, quirks, DB/engine knowledge      | `specs/overview.md` (Gotchas) |
-| Code smells, refactors spotted            | `specs/cleanup.md`            |
+- **`specs/ctx.md`** — the current task + its checkbox plan.
+- **`CHANGELOG.md`** — a task whose checkboxes are all done (move it here).
+- **`specs/roadmap.md`** — committed future direction.
+- **`specs/ideas.md`** — noted but not-now ideas.
+- **`specs/overview.md`** — architecture, data flow, durable knowledge; plus
+  gotchas, quirks, DB/engine knowledge (Gotchas section).
+- **`specs/cleanup.md`** — code smells, refactors spotted.
 
 Note: `CHANGELOG.md` and `AGENTS.md` live at the project **root**, not under
 `specs/`. `CHANGELOG.md` coexists with any conventional changelog already there.
+
+Content routing does not expand the user's edit scope. If the user limits edits
+to named files, record any needed follow-up in the active task and leave the
+other files untouched.
 
 **Forbidden inside `ctx.md`:** `Deferred` sections, `Roadmap pointer` lines,
 `Gotchas`/`Quirks` blocks, architecture essays, and "completed work is not
@@ -83,7 +85,8 @@ uncommitted   committed      active      done
 
 - An `ideas.md` note moves to `roadmap.md` when you decide to do it.
 - A `roadmap.md` item moves to `ctx.md` when you pick it up.
-- A `ctx.md` task moves to `CHANGELOG.md` when every checkbox is `[x]`.
+- A `ctx.md` task becomes eligible for `CHANGELOG.md` only under the archival
+  gate below; checked boxes alone do not authorize the move.
 
 When `ctx.md` has no active task, the next one comes from `roadmap.md`. This is
 the intended loop — keep each file to its stage.
@@ -180,6 +183,23 @@ The `specdev` binary scaffolds and inspects specs. It never mutates spec content
 - `specdev skill install [--local]` — install this skill, globally
   (`~/.agents/skills/specdev/`) or locally (`.agents/skills/specdev/`).
 
+## Formatting specs
+
+Specs are often read in a terminal editor (helix, vim) where rendered Markdown
+is unavailable. Write for plain text:
+
+- **No Markdown tables.** Use one bullet per item, with the key in bold:
+  `- **verify** — CI runs Acceptance; pass → review, fail → fix.`
+- **No ASCII diagrams** (box-drawing, wide state machines, arrows across
+  columns). Describe flows as numbered steps with sub-bullets; a one-line
+  summary like `draft → ready → done` is fine.
+- **Prefer bullets and short text sections** over long paragraphs. One idea
+  per bullet.
+- **Soft wraps.** Write each paragraph or bullet as one line and let the editor wrap it; don't hard-wrap at a fixed width.
+- **Code blocks only for literal content** — file formats, frontmatter
+  examples, commands, config. Not for diagrams.
+- **Shallow headings.** `##` for sections, `###` sparingly; avoid deeper.
+
 ## Marker protocol
 
 `^^^` and `&&&` are inline markers used **only inside spec files** to
@@ -208,6 +228,8 @@ When the user asks to work on a spec file with remarks:
 3. For each remark, either:
    - Address it with an adjacent `&&&` answer, or
    - Leave it unresolved with `^^^` if you need user input.
+   When a remark corrects nearby prose, update that prose too; an answer next
+   to a contradictory statement is not a resolution.
 4. Do not proceed to code edits while relevant `^^^` remarks remain
    unresolved. Address the remarks first or ask for clarification.
 5. Reply with:
@@ -220,6 +242,11 @@ When the user asks to work on a spec file with remarks:
 Compress only on **explicit user request** — e.g. "compress / fold / condense /
 clean up the `^^^`/`&&&` dialogue." A general "rewrite this section for clarity"
 is **not** a compress request. Never auto-compress.
+
+**Compression boundary:** A request to compress, fold, or resolve notes means
+fold resolved `^^^`/`&&&` pairs into adjacent prose. Preserve the rest of the
+plan, findings, and context at their existing level of detail. Shorten other
+material only when the user explicitly names it.
 
 To compress:
 
@@ -289,6 +316,7 @@ one line.
 - Start coding while active, relevant `^^^` remarks remain unresolved.
 - Put deferred items, roadmap pointers, gotchas, or architecture essays in
   `ctx.md`.
+- Use Markdown tables or ASCII diagrams in specs — see "Formatting specs".
 
 ## Gotchas
 

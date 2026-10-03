@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::Error;
+use crate::config::{CONFIG_FILE, DEFAULT_TOML};
 
 const OVERVIEW_TEMPLATE: &str = "\
 # Project Overview
@@ -94,6 +95,8 @@ pub fn init_at(specs_dir: &Path) -> Result<(), Error> {
         if all_specs_present
             && root.join("CHANGELOG.md").exists()
             && agents_has_section(root)
+            && root.join(CONFIG_FILE).exists()
+            && specs_dir.join("tasks").join("done").is_dir()
         {
             println!("specs/ already initialized with all core files.");
             return Ok(());
@@ -111,8 +114,19 @@ pub fn init_at(specs_dir: &Path) -> Result<(), Error> {
 
     write_if_missing(&root.join("CHANGELOG.md"), CHANGELOG_TEMPLATE)?;
     ensure_agents_section(root)?;
+    write_if_missing(&root.join(CONFIG_FILE), DEFAULT_TOML)?;
+    ensure_dir(&specs_dir.join("tasks"))?;
+    ensure_dir(&specs_dir.join("tasks").join("done"))?;
 
     println!("Done.");
+    Ok(())
+}
+
+fn ensure_dir(path: &Path) -> Result<(), Error> {
+    if !path.is_dir() {
+        fs::create_dir_all(path)?;
+        println!("  Created {}/", path.display());
+    }
     Ok(())
 }
 
@@ -177,6 +191,25 @@ mod tests {
         }
         assert!(tmp.path().join("CHANGELOG.md").exists());
         assert!(tmp.path().join("AGENTS.md").exists());
+        assert!(specs.join("tasks").is_dir());
+        assert!(specs.join("tasks").join("done").is_dir());
+        let config = fs::read_to_string(tmp.path().join(CONFIG_FILE)).unwrap();
+        assert_eq!(config, DEFAULT_TOML);
+    }
+
+    #[test]
+    fn keeps_existing_config() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join(CONFIG_FILE),
+            "[pipeline]\nmax_attempts = 9\n",
+        )
+        .unwrap();
+
+        init_at(&tmp.path().join("specs")).unwrap();
+
+        let config = fs::read_to_string(tmp.path().join(CONFIG_FILE)).unwrap();
+        assert_eq!(config, "[pipeline]\nmax_attempts = 9\n");
     }
 
     #[test]

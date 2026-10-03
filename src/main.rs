@@ -1,15 +1,32 @@
+use std::path::Path;
+
 use clap::{Parser, Subcommand};
 
+mod config;
+mod diag;
 mod init;
 mod list;
+mod md;
+mod output;
 mod scan;
 mod skill;
 mod status;
+mod task;
+
+use output::Format;
 
 #[derive(thiserror::Error, Debug)]
 enum Error {
     #[error("{0}")]
     Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Config(String),
+    #[error("{0}")]
+    Output(String),
+    #[error("{0}")]
+    Usage(String),
+    #[error("{0}")]
+    Diagnostic(#[from] diag::Diagnostic),
 }
 
 #[derive(Parser)]
@@ -19,6 +36,10 @@ enum Error {
     about = "Specification-driven development toolkit"
 )]
 struct Cli {
+    /// Output format
+    #[arg(long, global = true, value_enum, default_value_t = Format::Text)]
+    format: Format,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -42,6 +63,29 @@ enum Commands {
         #[command(subcommand)]
         command: SkillCommands,
     },
+    /// Manage task files in specs/tasks/
+    Task {
+        #[command(subcommand)]
+        command: TaskCommands,
+    },
+}
+
+#[derive(Subcommand, Debug, PartialEq)]
+enum TaskCommands {
+    /// Create a draft task file from the specdev.toml task definition
+    New {
+        /// Lowercase words joined by dashes, e.g. status-freshness
+        slug: String,
+    },
+    /// List open tasks in queue order (done tasks excluded)
+    List,
+    /// Show a task: state, plan progress, log, and the next step
+    Show {
+        /// Task id, sequence number, or slug
+        id: String,
+    },
+    /// Regenerate specs/tasks/_index.md
+    Index,
 }
 
 #[derive(Subcommand, Debug, PartialEq)]
@@ -58,15 +102,32 @@ enum SkillCommands {
 
 fn main() {
     let cli = Cli::parse();
+    let format = cli.format;
     let result = match cli.command {
-        Commands::Init => init::run(),
-        Commands::Scan => scan::run(),
-        Commands::Status => status::run(),
-        Commands::List { stats } => list::run(stats),
-        Commands::Skill { command } => match command {
-            SkillCommands::Install { local } => skill::install(local),
-            SkillCommands::Check => skill::check(),
-        },
+        Commands::Init => {
+            output::require_text("init", format).and_then(|()| init::run())
+        }
+        Commands::Scan => {
+            output::require_text("scan", format).and_then(|()| scan::run())
+        }
+        Commands::Status => {
+            output::require_text("status", format).and_then(|()| status::run())
+        }
+        Commands::List { stats } => list::run(stats, format),
+        Commands::Skill { command } => output::require_text("skill", format)
+            .and_then(|()| match command {
+                SkillCommands::Install { local } => skill::install(local),
+                SkillCommands::Check => skill::check(),
+            }),
+        Commands::Task { command } => {
+            let root = Path::new("");
+            match command {
+                TaskCommands::New { slug } => task::cmd::new(root, &slug, format),
+                TaskCommands::List => task::cmd::list(root, format),
+                TaskCommands::Show { id } => task::cmd::show(root, &id, format),
+                TaskCommands::Index => task::cmd::index(root, format),
+            }
+        }
     };
     if let Err(e) = result {
         eprintln!("error: {e}");

@@ -19,11 +19,9 @@ teaches is documented in `skills/SKILL.md`, not here.
 - `references/examples.md` — before/after examples, bundled with the skill.
 - `tests/cli.rs` — end-to-end binary tests.
 
-The CLI only inspects and scaffolds; it never mutates spec content. Archival,
-compression, and edits are agent-driven (taught by the skill).
+Today the CLI only inspects and scaffolds; archival, compression, and edits are agent-driven (taught by the skill).
 
-Planned direction: multi-agent parallel execution ("Dark Factory") — design in
-`specs/factory.md`.
+Direction ("Dark Factory", design in `specs/factory.md`): the CLI takes ownership of *structured* spec state — task frontmatter, status/stage transitions, the per-task `## Log`, generated indexes — through commands, and `specdev check` enforces it. Prose stays agent-edited. specdev never writes to git; it only reads changed-file lists by calling the `git` CLI (no bindings).
 
 ## Build & test
 

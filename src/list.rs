@@ -1,9 +1,12 @@
 use std::fs;
 use std::path::Path;
 
+use serde::Serialize;
+
 use crate::Error;
+use crate::md;
+use crate::output::{self, Format, Report};
 use crate::scan;
-use crate::status;
 
 /// Canonical display order for the core spec files; any others follow alphabetically.
 const CANONICAL_ORDER: [&str; 5] = [
@@ -14,7 +17,7 @@ const CANONICAL_ORDER: [&str; 5] = [
     "cleanup.md",
 ];
 
-pub fn run(stats: bool) -> Result<(), Error> {
+pub fn run(stats: bool, format: Format) -> Result<(), Error> {
     let specs_dir = Path::new("specs");
     if !specs_dir.exists() {
         eprintln!("No specs/ directory found. Run `specdev init` first.");
@@ -22,50 +25,124 @@ pub fn run(stats: bool) -> Result<(), Error> {
     }
 
     let files = collect_ordered(specs_dir)?;
-    if files.is_empty() {
-        println!("No spec files found in specs/");
-        return Ok(());
-    }
-
     if stats {
-        print_stats(specs_dir, &files)?;
+        output::emit(&stats_report(specs_dir, &files)?, format)
     } else {
-        print_list(specs_dir, &files)?;
+        output::emit(&list_report(specs_dir, &files)?, format)
     }
-    Ok(())
 }
 
-fn print_list(specs_dir: &Path, files: &[String]) -> Result<(), Error> {
-    println!("{:<16} {:<42} {:>5}", "File", "Description", "Lines");
-    for name in files {
-        let path = specs_dir.join(name);
-        let content = fs::read_to_string(&path)?;
-        let lines = content.lines().count();
-        let desc =
-            first_header(&content).unwrap_or_else(|| "(no header)".to_string());
-        println!("{:<16} {:<42} {:>5}", name, truncate(&desc, 42), lines);
-    }
-    Ok(())
+#[derive(Serialize)]
+struct ListReport {
+    files: Vec<ListEntry>,
 }
 
-fn print_stats(specs_dir: &Path, files: &[String]) -> Result<(), Error> {
-    println!(
-        "{:<16} {:>2} {:>2} {:>2} {:>3} {:>4} {:>4} {:>5} {:>6}",
-        "File", "H1", "H2", "H3", "H4+", "[x]", "[ ]", "^^^", "words"
-    );
+#[derive(Serialize)]
+struct ListEntry {
+    file: String,
+    description: Option<String>,
+    lines: usize,
+}
+
+impl Report for ListReport {
+    fn text(&self) -> String {
+        if self.files.is_empty() {
+            return "No spec files found in specs/".to_string();
+        }
+        let mut out =
+            format!("{:<16} {:<42} {:>5}", "File", "Description", "Lines");
+        for f in &self.files {
+            let desc = f.description.as_deref().unwrap_or("(no header)");
+            out.push_str(&format!(
+                "\n{:<16} {:<42} {:>5}",
+                f.file,
+                truncate(desc, 42),
+                f.lines
+            ));
+        }
+        out
+    }
+}
+
+fn list_report(specs_dir: &Path, files: &[String]) -> Result<ListReport, Error> {
+    let mut entries = Vec::new();
     for name in files {
-        let path = specs_dir.join(name);
-        let content = fs::read_to_string(&path)?;
-        let (h1, h2, h3, h4p) = count_headings(&content);
-        let (done, open_box) = status::count_checkboxes(&content);
-        let (open_mark, _resolved) = scan::count_markers(&content);
-        let words = content.split_whitespace().count();
-        println!(
+        let content = fs::read_to_string(specs_dir.join(name))?;
+        entries.push(ListEntry {
+            file: name.clone(),
+            description: first_header(&content),
+            lines: content.lines().count(),
+        });
+    }
+    Ok(ListReport { files: entries })
+}
+
+#[derive(Serialize)]
+struct StatsReport {
+    files: Vec<FileStats>,
+}
+
+#[derive(Serialize)]
+struct FileStats {
+    file: String,
+    h1: usize,
+    h2: usize,
+    h3: usize,
+    h4_plus: usize,
+    checked: usize,
+    unchecked: usize,
+    open_remarks: usize,
+    words: usize,
+}
+
+impl Report for StatsReport {
+    fn text(&self) -> String {
+        if self.files.is_empty() {
+            return "No spec files found in specs/".to_string();
+        }
+        let mut out = format!(
             "{:<16} {:>2} {:>2} {:>2} {:>3} {:>4} {:>4} {:>5} {:>6}",
-            name, h1, h2, h3, h4p, done, open_box, open_mark, words
+            "File", "H1", "H2", "H3", "H4+", "[x]", "[ ]", "^^^", "words"
         );
+        for s in &self.files {
+            out.push_str(&format!(
+                "\n{:<16} {:>2} {:>2} {:>2} {:>3} {:>4} {:>4} {:>5} {:>6}",
+                s.file,
+                s.h1,
+                s.h2,
+                s.h3,
+                s.h4_plus,
+                s.checked,
+                s.unchecked,
+                s.open_remarks,
+                s.words
+            ));
+        }
+        out
     }
-    Ok(())
+}
+
+fn stats_report(specs_dir: &Path, files: &[String]) -> Result<StatsReport, Error> {
+    let mut stats = Vec::new();
+    for name in files {
+        let content = fs::read_to_string(specs_dir.join(name))?;
+        let outline = md::outline(&content);
+        let (h1, h2, h3, h4_plus) = outline.heading_counts();
+        let (checked, total) = outline.checkbox_counts();
+        let (open_remarks, _resolved) = scan::count_markers(&content);
+        stats.push(FileStats {
+            file: name.clone(),
+            h1,
+            h2,
+            h3,
+            h4_plus,
+            checked,
+            unchecked: total - checked,
+            open_remarks,
+            words: content.split_whitespace().count(),
+        });
+    }
+    Ok(StatsReport { files: stats })
 }
 
 /// List specs/*.md in canonical order first, then the rest alphabetically.
@@ -98,47 +175,7 @@ fn collect_ordered(specs_dir: &Path) -> Result<Vec<String>, Error> {
 /// Returns `None` if there is no well-formed heading (a `#` run must be
 /// followed by a space or end-of-line).
 pub fn first_header(content: &str) -> Option<String> {
-    for line in content.lines() {
-        let t = line.trim_start();
-        if !t.starts_with('#') {
-            continue;
-        }
-        let level = t.chars().take_while(|&c| c == '#').count();
-        let after = &t[level..];
-        if after.is_empty() || after.starts_with(' ') {
-            let text = after.trim();
-            if !text.is_empty() {
-                return Some(text.to_string());
-            }
-        }
-    }
-    None
-}
-
-/// Count headings by level. Returns (h1, h2, h3, h4+).
-pub fn count_headings(content: &str) -> (usize, usize, usize, usize) {
-    let mut h1 = 0;
-    let mut h2 = 0;
-    let mut h3 = 0;
-    let mut h4p = 0;
-    for line in content.lines() {
-        let t = line.trim_start();
-        if !t.starts_with('#') {
-            continue;
-        }
-        let level = t.chars().take_while(|&c| c == '#').count();
-        let after = &t[level..];
-        if !(after.is_empty() || after.starts_with(' ')) {
-            continue;
-        }
-        match level {
-            1 => h1 += 1,
-            2 => h2 += 1,
-            3 => h3 += 1,
-            _ => h4p += 1,
-        }
-    }
-    (h1, h2, h3, h4p)
+    md::outline(content).first_heading().map(str::to_string)
 }
 
 /// Truncate to `max` chars, appending an ellipsis if shortened.
@@ -181,6 +218,10 @@ mod tests {
     fn first_header_none_when_absent() {
         let content = "no headings here\njust prose\n";
         assert_eq!(first_header(content), None);
+    }
+
+    fn count_headings(content: &str) -> (usize, usize, usize, usize) {
+        md::outline(content).heading_counts()
     }
 
     #[test]
