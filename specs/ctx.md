@@ -6,18 +6,21 @@ State: in progress (started 2026-10-02)
 Design and Phases 1–2 are done (CHANGELOG.md, 2026-10-03).
 
 Phase 3 — `specdev check`:
-- [ ] Per-task: required fields/sections, enum values, `stage` iff `in-progress`, `blocked_reason` iff `blocked`, id matches filename, `depends` ids exist
+- [ ] Transition table in one place (`task::transition`) plus log replay; used by `check` now and by `advance` in Phase 4
+- [ ] Per-task: required fields/sections, enum values, `stage` iff `in-progress`, `blocked_reason` iff `blocked`, id matches filename, `depends` ids exist, `## Acceptance` not empty
+- [ ] Scope lint: non-empty, no bare `**`, paths exist or are plausibly new (parent dir exists); no glob matching yet
 - [ ] Log consistency: frontmatter equals state replayed from `## Log`; every logged transition legal; `scope` = approved + logged expansions
-- [ ] Repo-wide: at most one active task; `_index.md` matches generated output
-- [ ] Fold existing `status` warnings (ctx forbidden content, archive nudge) into `check`; `status` keeps its summary view
+- [ ] Repo-wide: at most one active task; `_index.md` matches generated output; broken task files reported
+- [ ] Fold existing `status` warnings (ctx forbidden content, archive nudge) into `check`; warn when `ctx.md` points at a non-active task; `status` keeps its summary view
+- [ ] Migrate `scan` and `status` to `Report` so `--format json|toon` works on them
 
 Phase 4 — state commands: `task advance` / `task block` / `task set` / `task scope`:
-- [ ] Transition table in one place (`task::transition`), used by `advance` and by `check`'s log replay
-- [ ] `advance`: legal moves only; `draft → ready` refuses open `^^^` and records approved scope; `ready → in-progress` refuses if another task is active; `→ fix` bumps `attempts`; cap → `blocked`
+- [ ] `advance`: legal moves only (uses the Phase 3 transition table); `draft → ready` refuses open `^^^` and records approved scope; `ready → in-progress` refuses if another task is active; `→ fix` bumps `attempts`; cap → `blocked`
 - [ ] `block --reason`, `set <field> <value>` (plain fields only: `source`, `depends`, extra fields), `scope add|rm <path> --reason`
 - [ ] Every command: rewrite frontmatter + append `## Log` line only, regenerate `_index.md`, never touch prose
 
 Phase 5 — scope check + Acceptance gate (specdev runs no project commands):
+- [ ] Add `glob` for scope matching (deferred from Phase 3)
 - [ ] `vcs` module: `changed_files()` via the `git` CLI, read-only (`git diff --name-only -z HEAD`, `git diff --cached --name-only -z`, `git ls-files --others --exclude-standard -z`); faked in tests
 - [ ] `check`: working-tree files outside the active task's `scope` → error; `check --staged`: staged files outside `scope` → warning; wire `--staged` into `prek.toml`
 - [ ] Without git: scope check skipped with a warning, rest still runs
@@ -110,8 +113,9 @@ Log location: per task — a `## Log` section at the end of each `specs/tasks/<i
 &&& Per task, as the last section of the task file (now stated above the format block; also in `factory.md` → Task contract). Why not the alternatives: a common log file would be one more shared hot file every command writes to (conflicts once tasks run in parallel) and would split a task's history from the task; a separate `<id>.log` file doubles the file count and can drift from its task on rename/archive. In-file, the log moves to `done/` with the task, and `check` validates each task file on its own.
 
 ## Findings
-- Dependency tree (runtime, unique crates; 2026-10-03): 23 → 53 after adding the Phase 1–2 set. Per-crate subtrees, overlapping: `comrak` 0.55 (defaults off) 12 — caseless, finl_unicode, jetscii, phf ×3, rustc-hash, smallvec, tinyvec, typed-arena, unicode-normalization; `toon-format` 0.5 (defaults off) 17, but all shared (serde, serde_json, indexmap, thiserror); `serde_json` 8; `toml` 1.x 7; `serde` derive 7 (syn/quote/proc-macro2 already came with thiserror); `chrono` 0.4 (clock, std) 4 — iana-time-zone + core-foundation-sys on macOS (Windows gets windows-* instead). `glob` deferred to Phase 3.
+- Dependency tree (runtime, unique crates; 2026-10-03): 23 → 53 after adding the Phase 1–2 set. Per-crate subtrees, overlapping: `comrak` 0.55 (defaults off) 12 — caseless, finl_unicode, jetscii, phf ×3, rustc-hash, smallvec, tinyvec, typed-arena, unicode-normalization; `toon-format` 0.5 (defaults off) 17, but all shared (serde, serde_json, indexmap, thiserror); `serde_json` 8; `toml` 1.x 7; `serde` derive 7 (syn/quote/proc-macro2 already came with thiserror); `chrono` 0.4 (clock, std) 4 — iana-time-zone + core-foundation-sys on macOS (Windows gets windows-* instead). `glob` deferred to Phase 5 (only scope-vs-changed-files matching needs it).
 - Phases 1–2 landed 2026-10-03; gate green (109 unit + 15 e2e tests, clippy `-D warnings`). Layout: `src/{md,diag,output,config}.rs`, `src/task.rs` + `src/task/{id,frontmatter,log,store,cmd}.rs`.
+- E2e coverage gaps closed 2026-10-04 (15 → 21 tests in `tests/cli.rs`): `task index`, `skill install`/`skill check` (run with `HOME` set to a tempdir via `run_env`, so tests never touch the real `~/.agents/`), and behavioral `scan`/`status` tests (markers, forbidden content, missing root files). `status` assertions pin today's exit-0-with-warnings behavior; Phase 3 changes them deliberately.
 - comrak counts `1. [x]` as a task item (GFM); `md` counts only bullet-list task items to keep the existing semantics.
 - Fixed in passing: `list --stats` `[ ]` column printed the total checkbox count; it now prints unchecked.
 - `scan`, `status`, `init`, `skill` are still text-only; `--format json|toon` on them exits 1 with "does not support --format … yet" until they migrate (Phase 3 for scan/status).
@@ -132,4 +136,4 @@ Log location: per task — a `## Log` section at the end of each `specs/tasks/<i
 - `factory.md` has no open design questions (2026-10-03); quality thresholds start as placeholders and get tuned in Phase 8 dogfooding.
 
 ## Next
-User review of Phases 1–2 (try `specdev task new|list|show|index` in a scratch dir); then Phase 3 — `specdev check` (adds `glob`).
+User review of Phases 1–2 (try `specdev task new|list|show|index` in a scratch dir) and commit the pending design pivot (no `task verify`; specdev runs no project commands). Then Phase 3 — `specdev check`, starting with the transition table (pulled forward from Phase 4: log replay needs it). Plan reordered 2026-10-03.
