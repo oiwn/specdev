@@ -10,16 +10,31 @@ fn run(cwd: &Path, args: &[&str]) -> (String, String, i32) {
     run_env(cwd, args, &[])
 }
 
+/// Variables git exports to hooks; inherited, they'd point a test's git (and
+/// specdev's scope check) at this repository instead of the tempdir.
+const GIT_HOOK_ENV: [&str; 3] = ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE"];
+
+/// A command isolated from any enclosing repository: hook variables removed,
+/// and repository discovery stops at `cwd` (a tempdir is never inside one).
+fn isolated(program: &str, cwd: &Path) -> Command {
+    let mut cmd = Command::new(program);
+    for var in GIT_HOOK_ENV {
+        cmd.env_remove(var);
+    }
+    cmd.env("GIT_CEILING_DIRECTORIES", cwd.parent().unwrap_or(cwd))
+        .current_dir(cwd);
+    cmd
+}
+
 /// Like `run`, with extra environment variables (e.g. `HOME` for skill tests).
 fn run_env(
     cwd: &Path,
     args: &[&str],
     env: &[(&str, &Path)],
 ) -> (String, String, i32) {
-    let output = Command::new(BIN)
+    let output = isolated(BIN, cwd)
         .args(args)
         .envs(env.iter().copied())
-        .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -858,4 +873,136 @@ fn block_set_and_scope_commands() {
     assert_eq!(json["id"], "0002-y");
     assert_eq!(json["to"], "draft");
     assert!(json["log"][0].as_str().unwrap().ends_with("set source x"));
+}
+
+/// Run git in `dir` (isolated from this repository); must succeed.
+fn git(dir: &Path, args: &[&str]) {
+    let out = isolated("git", dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .output()
+        .expect("git must be installed for these tests");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// `drafted()` advanced to in-progress/implement.
+fn implementing(dir: &Path) {
+    step(dir, &["task", "advance", "x"]);
+    step(dir, &["task", "advance", "x"]);
+}
+
+#[test]
+fn scope_check_against_git_working_tree() {
+    let (tmp, _) = drafted();
+    let dir = tmp.path();
+    fs::write(dir.join("src/a.rs"), "// a\n").unwrap();
+    fs::write(
+        dir.join("specdev.toml"),
+        "[scope]\nalways_allowed = [\"Cargo.lock\"]\n",
+    )
+    .unwrap();
+    git(dir, &["init", "-q"]);
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", "baseline"]);
+    implementing(dir);
+
+    // In scope, under specs/, or allowlisted: fine.
+    fs::write(dir.join("src/a.rs"), "// a, edited\n").unwrap();
+    fs::write(dir.join("specs/ctx.md"), "# Current Task Context: x\n").unwrap();
+    fs::write(dir.join("Cargo.lock"), "# lock\n").unwrap();
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!((code, out.as_str()), (0, "OK\n"));
+
+    // An untracked file outside scope fails until the scope is expanded.
+    fs::write(dir.join("src/b.rs"), "// b\n").unwrap();
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 1);
+    assert!(out.contains("src/b.rs: error[out-of-scope]"), "got {out}");
+    assert!(out.contains("task scope 0001-x add src/b.rs"), "got {out}");
+    step(
+        dir,
+        &[
+            "task", "scope", "x", "add", "src/b.rs", "--reason", "helper",
+        ],
+    );
+
+    // --staged looks only at the index and only warns.
+    fs::write(dir.join("README.md"), "staged\n").unwrap();
+    fs::write(dir.join("NOTES.md"), "not staged\n").unwrap();
+    git(dir, &["add", "README.md"]);
+    let (out, _, code) = run(dir, &["check", "--staged"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(
+        out.contains("README.md: warning[out-of-scope]"),
+        "got {out}"
+    );
+    assert!(!out.contains("NOTES.md"), "got {out}");
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 1);
+    assert!(out.contains("README.md: error[out-of-scope]"), "got {out}");
+    assert!(out.contains("NOTES.md: error[out-of-scope]"), "got {out}");
+}
+
+#[test]
+fn scope_check_before_the_first_commit() {
+    // Without a commit every file is a change, `init`'s own files included.
+    let (tmp, _) = drafted();
+    let dir = tmp.path();
+    git(dir, &["init", "-q"]);
+    for _ in 0..2 {
+        let (_, err, code) = run(dir, &["task", "advance", "x"]);
+        assert_eq!(code, 0, "{err}");
+    }
+    fs::write(dir.join("src/a.rs"), "// a\n").unwrap();
+    fs::write(dir.join("src/z.rs"), "// z\n").unwrap();
+    git(dir, &["add", "src/a.rs"]);
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 1, "got {out}");
+    assert!(out.contains("src/z.rs: error[out-of-scope]"), "got {out}");
+    assert!(out.contains("AGENTS.md: error[out-of-scope]"), "got {out}");
+    assert!(!out.contains("src/a.rs:"), "got {out}");
+    assert!(!out.contains("specs/"), "got {out}");
+    assert!(!out.contains("scope-skipped"), "got {out}");
+}
+
+#[test]
+fn scope_check_skipped_without_git() {
+    let (tmp, _) = drafted();
+    let dir = tmp.path();
+    implementing(dir);
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(
+        out.contains("warning[scope-skipped]: scope check skipped"),
+        "got {out}"
+    );
+}
+
+#[test]
+fn task_new_prefills_acceptance_defaults() {
+    let tmp = init_tmp();
+    let dir = tmp.path();
+    fs::write(
+        dir.join("specdev.toml"),
+        "[acceptance]\ndefault = [\"cargo test\", \"cargo clippy\"]\n",
+    )
+    .unwrap();
+    step(dir, &["task", "new", "x"]);
+    let content = fs::read_to_string(dir.join("specs/tasks/0001-x.md")).unwrap();
+    assert!(
+        content.contains(
+            "## Acceptance\n\n- [ ] `cargo test`\n- [ ] `cargo clippy`\n\n## Log\n"
+        ),
+        "got {content}"
+    );
 }

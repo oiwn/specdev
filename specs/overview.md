@@ -18,6 +18,7 @@ specdev is a small Rust CLI plus a bundled agent skill. The CLI scaffolds, inspe
   - `src/task/cmd.rs` — `task new|list|show|index`.
   - `src/task/state.rs` — state commands `task advance|block|set|scope`: frontmatter + `## Log` only, stage gates, and a before/after `check` safety net.
 - `src/check.rs` — `specdev check`: task contract, log consistency, one active task, index freshness, plus the spec warnings from `status`. Errors exit 1.
+- `src/vcs.rs` — changed files from the `git` CLI (read-only, `-z`, `--relative`); `check` compares them with the active task's scope.
 - `src/init.rs` — scaffolds `specs/` + root `CHANGELOG.md`/`AGENTS.md` (AGENTS.md is append-aware, idempotent via `<!-- BEGIN/END specdev -->`).
 - `src/scan.rs` — parses `^^^`/`&&&` remark markers.
 - `src/status.rs` — health summary: markers, ctx checkbox progress; `spec_diagnostics` (forbidden ctx content, archive nudge, missing root files) is shared with `check`.

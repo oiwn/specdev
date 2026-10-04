@@ -36,6 +36,12 @@ pub fn new(root: &Path, slug: &str, format: Format) -> Result<(), Error> {
     let mut body = format!("# Task: {title}\n\n");
     for section in &config.task.required_sections {
         body.push_str(&format!("## {section}\n\n"));
+        if section == "Acceptance" && !config.acceptance.default.is_empty() {
+            for item in &config.acceptance.default {
+                body.push_str(&format!("- [ ] `{item}`\n"));
+            }
+            body.push('\n');
+        }
     }
     let task = Task {
         path: path.clone(),

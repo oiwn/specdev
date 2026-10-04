@@ -80,7 +80,7 @@ Notes:
 
 - **Proposed in `draft`.** The agent writes `scope` together with the Plan. `specdev check` verifies the paths exist (or are clearly new files) and the quality gate checks the size.
 - **Agreed at `draft → ready`.** The human approves scope and plan together. `specdev task advance` records the approved scope in the task's `## Log`, so later expansions are measured against it without needing git history.
-- **Locked from `implement` on.** The agent changes only files inside `scope`, plus the task file itself.
+- **Locked from `implement` on.** The agent changes only files inside `scope`. Never counted against it: anything under `specs/` (the task file, `_index.md`, `ctx.md`, spec prose) and the project's `[scope] always_allowed` globs (e.g. `Cargo.lock`). A scope entry without glob characters covers everything under it.
 - **Expansion is declared, never silent.** Planning can't foresee every file. The agent runs `specdev task scope <id> add <path> --reason "..."`, which updates `scope` and logs the reason. Review accepts or rejects each expansion. A large expansion (many files, a new module) means the plan was wrong → `blocked`, back to `draft`.
 - **Checked continuously.** A pre-commit hook (`specdev check --staged`) warns when staged files fall outside the active task's `scope`. `specdev check` does the same check for the whole working tree. Changed files come from the `git` CLI, read-only: `git diff --name-only -z HEAD`, `git diff --cached --name-only -z`, `git ls-files --others --exclude-standard -z`. Without git, or outside a repo, the scope check is skipped with a warning; everything else still runs.
 

@@ -15,8 +15,9 @@ use crate::output::{self, Format, Report};
 use crate::status;
 use crate::task::transition;
 use crate::task::{INDEX_FILE, Status, TASKS_DIR, Task, TaskId, TaskStore};
+use crate::vcs;
 
-pub fn run(root: &Path, format: Format) -> Result<(), Error> {
+pub fn run(root: &Path, staged: bool, format: Format) -> Result<(), Error> {
     if !root.join("specs").is_dir() {
         return Err(Error::Usage(
             "No specs/ directory found. Run `specdev init` first.".to_string(),
@@ -32,6 +33,7 @@ pub fn run(root: &Path, format: Format) -> Result<(), Error> {
     let mut diagnostics = Vec::new();
     if let Some(store) = &store {
         diagnostics.extend(check_store(store, &config, root)?);
+        diagnostics.extend(scope_check(store, &config, root, staged));
     }
     diagnostics.extend(status::spec_diagnostics(root)?);
     diagnostics.extend(ctx_task_refs(root, store.as_ref())?);
@@ -236,6 +238,15 @@ fn scope_lint(task: &Task, root: &Path) -> Vec<Diagnostic> {
             ));
             continue;
         }
+        if let Err(e) = glob::Pattern::new(entry) {
+            diags.push(Diagnostic::error(
+                &task.path,
+                None,
+                "scope-glob",
+                format!("scope entry `{entry}` is not a valid glob: {e}"),
+            ));
+            continue;
+        }
         let literal = entry
             .split(['*', '?', '['])
             .next()
@@ -259,6 +270,98 @@ fn scope_lint(task: &Task, root: &Path) -> Vec<Diagnostic> {
         }
     }
     diags
+}
+
+/// Changed files (from git) against the active task's scope. Working-tree
+/// violations are errors; `--staged` (the pre-commit hook) only warns.
+fn scope_check(
+    store: &TaskStore,
+    config: &Config,
+    root: &Path,
+    staged: bool,
+) -> Vec<Diagnostic> {
+    let active: Vec<&Task> = store
+        .tasks
+        .iter()
+        .filter(|t| t.front.status.is_active())
+        .collect();
+    // No active task: nothing to compare. Several: `active-tasks` reports it.
+    let [task] = active.as_slice() else {
+        return Vec::new();
+    };
+    match vcs::changed_files(root, staged) {
+        vcs::Changes::Files(changed) => {
+            let severity = if staged {
+                Severity::Warning
+            } else {
+                Severity::Error
+            };
+            scope_violations(
+                task,
+                root,
+                &changed,
+                &config.scope.always_allowed,
+                severity,
+            )
+        }
+        vcs::Changes::Unavailable(reason) => vec![Diagnostic::warning(
+            &task.path,
+            None,
+            "scope-skipped",
+            format!("scope check skipped: {reason}"),
+        )],
+    }
+}
+
+/// Changed paths (relative to `root`) that neither the task's scope, `specs/`,
+/// nor the project's `always_allowed` globs cover.
+fn scope_violations(
+    task: &Task,
+    root: &Path,
+    changed: &[String],
+    always_allowed: &[String],
+    severity: Severity,
+) -> Vec<Diagnostic> {
+    let id = &task.front.id;
+    changed
+        .iter()
+        .filter(|path| {
+            !path.starts_with("specs/")
+                && !always_allowed.iter().any(|e| covers(e, path))
+                && !task.front.scope.iter().any(|e| covers(e, path))
+        })
+        .map(|path| {
+            Diagnostic::error(
+                root.join(path),
+                None,
+                "out-of-scope",
+                format!(
+                    "changed but not in the scope of `{id}`; if the task needs it: `specdev task scope {id} add {path} --reason \"...\"`"
+                ),
+            )
+            .with_severity(severity)
+        })
+        .collect()
+}
+
+/// Whether a scope entry covers `path`: a glob match (`*` stays inside a
+/// directory, `**` crosses), or for a plain entry the path itself or
+/// anything under it.
+fn covers(entry: &str, path: &str) -> bool {
+    let entry = entry.strip_prefix("./").unwrap_or(entry);
+    if !entry.contains(['*', '?', '[']) {
+        let entry = entry.trim_end_matches('/');
+        return path == entry
+            || path
+                .strip_prefix(entry)
+                .is_some_and(|rest| rest.starts_with('/'));
+    }
+    let options = glob::MatchOptions {
+        case_sensitive: true,
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
+    };
+    glob::Pattern::new(entry).is_ok_and(|p| p.matches_with(path, options))
 }
 
 /// Frontmatter must equal the state its `## Log` replays to.
@@ -563,5 +666,83 @@ created: 2026-10-03
             (diags[0].code, diags[0].line),
             ("ctx-task-inactive", Some(3))
         );
+    }
+
+    #[test]
+    fn scope_entries_cover_paths() {
+        for (entry, path) in [
+            ("src/a.rs", "src/a.rs"),
+            ("./src/a.rs", "src/a.rs"),
+            ("src/*.rs", "src/a.rs"),
+            ("src/**/*.rs", "src/task/state.rs"),
+            ("src/**/*.rs", "src/a.rs"),
+            ("src/task", "src/task/state.rs"),
+            ("src/task/", "src/task/state.rs"),
+            ("Cargo.lock", "Cargo.lock"),
+        ] {
+            assert!(covers(entry, path), "{entry} should cover {path}");
+        }
+        for (entry, path) in [
+            ("src/a.rs", "src/a.rs.bak"),
+            ("src/*.rs", "src/task/state.rs"),
+            ("src/task", "src/tasks.rs"),
+            ("src/task", "src/taskx/a.rs"),
+            ("src/[", "src/["),
+        ] {
+            assert!(!covers(entry, path), "{entry} should not cover {path}");
+        }
+    }
+
+    #[test]
+    fn scope_violations_skip_specs_and_allowlist() {
+        let task = Task::parse(
+            Path::new("specs/tasks/0001-a.md"),
+            &VALID_READY
+                .replace("scope: [src/a.rs]", "scope: [src/a.rs, src/task]"),
+        )
+        .unwrap();
+        let changed: Vec<String> = [
+            "src/a.rs",
+            "src/task/state.rs",
+            "specs/ctx.md",
+            "specs/tasks/_index.md",
+            "Cargo.lock",
+            "src/b.rs",
+            "README.md",
+        ]
+        .map(String::from)
+        .to_vec();
+        let allowed = ["Cargo.lock".to_string()];
+        let diags = scope_violations(
+            &task,
+            Path::new(""),
+            &changed,
+            &allowed,
+            Severity::Error,
+        );
+        let flagged: Vec<String> =
+            diags.iter().map(|d| d.file.display().to_string()).collect();
+        assert_eq!(flagged, ["src/b.rs", "README.md"]);
+        assert!(diags.iter().all(|d| d.code == "out-of-scope"));
+        assert!(diags[0].message.contains("task scope 0001-a add src/b.rs"));
+
+        let warned = scope_violations(
+            &task,
+            Path::new(""),
+            &changed,
+            &[],
+            Severity::Warning,
+        );
+        assert_eq!(warned.len(), 3, "Cargo.lock flagged without the allowlist");
+        assert!(warned.iter().all(|d| d.severity == Severity::Warning));
+    }
+
+    #[test]
+    fn invalid_glob_in_scope_is_an_error() {
+        let bad = VALID_READY
+            .replace("scope: [src/a.rs]", "scope: [src/a.rs, \"src/[\"]")
+            .replace("approved: src/a.rs", "approved: src/a.rs, src/[");
+        let tmp = project(&[("0001-a.md", &bad)]);
+        assert_eq!(codes(&tmp), [("scope-glob", E)]);
     }
 }

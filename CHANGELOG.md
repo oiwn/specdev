@@ -11,6 +11,17 @@ task. This coexists with any conventional release notes already here.
 - files touched / decisions locked
 -->
 
+## 2026-10-04 — New specdev version: Phases 3–5
+
+Part of the ongoing task "New specdev version and updated workflow" (Phases 6–8 remain in `specs/ctx.md`).
+
+- **E2e coverage first**: `tests/cli.rs` gained `task index`, `skill install`/`skill check` (with `HOME` pointed at a tempdir), and behavioral `scan`/`status` tests, so the Phase 3 refactor had a net.
+- **Phase 3 — `specdev check`** (`src/check.rs`, `src/task/transition.rs`): one transition table plus a `## Log` replay; per-task contract (id/filename, `stage`/`blocked_reason` iff, required sections, `depends`, completeness — warnings in draft, errors after), scope lint, log consistency (frontmatter must equal the replayed state), one active task, `_index.md` freshness, ctx warnings folded in from `status`. Errors exit 1. `scan` and `status` now emit reports, so `--format json|toon` works on them; `status` warnings read `<file>: <message>`.
+- **Phase 4 — state commands** (`src/task/state.rs`): `task advance [--to]`, `task block --reason`, `task set`, `task scope add|rm`. Gates: no open `^^^` for draft → ready, Plan ticked for implement → verify, Acceptance ticked for verify → review, one active task; entering fix past `max_attempts` blocks the task. Every command refuses a change that would add `check` errors and refuses outright on a broken log.
+- **Phase 5 — scope check** (`src/vcs.rs`): `check` compares changed files from the `git` CLI (read-only) with the active task's scope; `specs/` and `[scope] always_allowed` are exempt, plain entries cover their subtree. `check --staged` warns and runs as a `prek.toml` hook. No git → one `scope-skipped` warning. `task new` pre-fills `## Acceptance` from `acceptance.default`; `Manual checks` joined the default optional sections.
+- Fixed: a freshly initialized project failed `check` on the missing `_index.md`; a missing index is now fine until the first task exists.
+- Dependencies: `glob` 0.3 (+1 crate, no deps of its own). 135 unit + 34 e2e tests; clippy `-D warnings` clean.
+
 ## 2026-10-03 — New specdev version: design + Phases 1–2
 
 Part of the ongoing task "New specdev version and updated workflow" (Phases 3–8 remain in `specs/ctx.md`).

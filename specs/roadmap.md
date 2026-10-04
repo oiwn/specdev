@@ -7,14 +7,14 @@ Dark Factory track — design in `specs/factory.md`; build phases and their step
 - Foundation: comrak-backed Markdown outline, `specdev.toml` config, task types with flat-YAML frontmatter and per-task `## Log`, `--format text|json|toon`.
 - `init` scaffolds `specdev.toml` and `specs/tasks/`; `task new|list|show|index`.
 
-## v0.4 — Contract enforcement (Phases 3–4)
+## v0.4 — Contract enforcement (Phases 3–4) — done 2026-10-04
 
 - `specdev check`: task contract, log consistency, one active task, generated index.
 - State commands: `task advance|block|set|scope` with one transition table.
 
 ## v0.5 — Verify, archive, quality (Phases 5–7)
 
-- Scope check via the `git` CLI, read-only (`check`, and `check --staged` for pre-commit); `verify → review` gated on ticked Acceptance boxes. specdev runs no project commands.
+- Scope check via the `git` CLI, read-only (`check`, and `check --staged` for pre-commit); `verify → review` gated on ticked Acceptance boxes. specdev runs no project commands. — done 2026-10-04 (Phase 5)
 - `task done`: archive to `done/`, changelog entry, index.
 - Quality gate metrics and thresholds; `specdev fmt` for soft-wrapped specs.
 

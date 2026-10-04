@@ -16,7 +16,7 @@ pub const DEFAULT_TOML: &str = r#"# specdev project config.
 [task]
 # Sections every task file must have; `task new` creates them.
 required_sections = ["Plan", "Acceptance"]
-optional_sections = ["Context", "Findings", "Review", "Spec updates"]
+optional_sections = ["Manual checks", "Context", "Findings", "Review", "Spec updates"]
 # Project-specific optional frontmatter fields.
 extra_fields = []
 
@@ -27,6 +27,10 @@ max_attempts = 3
 [acceptance]
 # Acceptance items every task gets, e.g. ["cargo test"]. specdev never runs them.
 default = []
+
+[scope]
+# Globs never flagged as out of scope, e.g. ["Cargo.lock"]. specs/ is always allowed.
+always_allowed = []
 
 [quality.task]
 max_plan_steps = 8
@@ -43,6 +47,7 @@ pub struct Config {
     pub task: TaskDef,
     pub pipeline: Pipeline,
     pub acceptance: Acceptance,
+    pub scope: ScopeConfig,
     pub quality: Quality,
 }
 
@@ -64,6 +69,13 @@ pub struct Pipeline {
 #[serde(default, deny_unknown_fields)]
 pub struct Acceptance {
     pub default: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ScopeConfig {
+    /// Globs that are never out of scope (on top of `specs/`).
+    pub always_allowed: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -88,6 +100,7 @@ impl Default for TaskDef {
         Self {
             required_sections: strings(&["Plan", "Acceptance"]),
             optional_sections: strings(&[
+                "Manual checks",
                 "Context",
                 "Findings",
                 "Review",
@@ -158,6 +171,15 @@ mod tests {
     #[test]
     fn unknown_keys_are_rejected() {
         assert!(Config::parse("[pipeline]\nstages = [\"x\"]\n").is_err());
+        assert!(Config::parse("[scope]\nallow = [\"x\"]\n").is_err());
+    }
+
+    #[test]
+    fn scope_allowlist_parses() {
+        let c =
+            Config::parse("[scope]\nalways_allowed = [\"Cargo.lock\"]\n").unwrap();
+        assert_eq!(c.scope.always_allowed, ["Cargo.lock"]);
+        assert!(Config::default().scope.always_allowed.is_empty());
     }
 
     #[test]

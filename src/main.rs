@@ -13,6 +13,7 @@ mod scan;
 mod skill;
 mod status;
 mod task;
+mod vcs;
 
 use output::Format;
 
@@ -55,8 +56,12 @@ enum Commands {
     Scan,
     /// Show spec directory health and status
     Status,
-    /// Validate task files, their logs, the task index, and spec rules
-    Check,
+    /// Validate task files, their logs, the task index, scope, and spec rules
+    Check {
+        /// Check only staged files against the scope, as warnings (pre-commit)
+        #[arg(long)]
+        staged: bool,
+    },
     /// List spec files; use --stats for a structural breakdown
     List {
         /// Show per-file heading/checkbox/word stats instead of the simple list
@@ -158,7 +163,7 @@ fn main() {
         }
         Commands::Scan => scan::run(Path::new(""), format),
         Commands::Status => status::run(Path::new(""), format),
-        Commands::Check => check::run(Path::new(""), format),
+        Commands::Check { staged } => check::run(Path::new(""), staged, format),
         Commands::List { stats } => list::run(stats, format),
         Commands::Skill { command } => output::require_text("skill", format)
             .and_then(|()| match command {
@@ -226,7 +231,11 @@ mod tests {
 
     #[test]
     fn parses_check() {
-        assert!(matches!(cli(&["check"]).unwrap(), Commands::Check));
+        assert_eq!(cli(&["check"]).unwrap(), Commands::Check { staged: false });
+        assert_eq!(
+            cli(&["check", "--staged"]).unwrap(),
+            Commands::Check { staged: true }
+        );
     }
 
     #[test]
