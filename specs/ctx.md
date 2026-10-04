@@ -15,16 +15,16 @@ Phase 3 — `specdev check`:
 - [x] Migrate `scan` and `status` to `Report` so `--format json|toon` works on them
 
 Phase 4 — state commands: `task advance` / `task block` / `task set` / `task scope`:
-- [ ] `advance`: legal moves only (uses the Phase 3 transition table); `draft → ready` refuses open `^^^` and records approved scope; `ready → in-progress` refuses if another task is active; `→ fix` bumps `attempts`; cap → `blocked`
-- [ ] `block --reason`, `set <field> <value>` (plain fields only: `source`, `depends`, extra fields), `scope add|rm <path> --reason`
-- [ ] Every command: rewrite frontmatter + append `## Log` line only, regenerate `_index.md`, never touch prose
+- [x] `advance`: legal moves only (uses the Phase 3 transition table); `draft → ready` refuses open `^^^` and records approved scope; `ready → in-progress` refuses if another task is active; `→ fix` bumps `attempts`; cap → `blocked`
+- [x] `block --reason`, `set <field> <value>` (plain fields only: `source`, `depends`, extra fields), `scope add|rm <path> --reason`
+- [x] Every command: rewrite frontmatter + append `## Log` line only, regenerate `_index.md`, never touch prose
 
 Phase 5 — scope check + Acceptance gate (specdev runs no project commands):
 - [ ] Add `glob` for scope matching (deferred from Phase 3)
 - [ ] `vcs` module: `changed_files()` via the `git` CLI, read-only (`git diff --name-only -z HEAD`, `git diff --cached --name-only -z`, `git ls-files --others --exclude-standard -z`); faked in tests
 - [ ] `check`: working-tree files outside the active task's `scope` → error; `check --staged`: staged files outside `scope` → warning; wire `--staged` into `prek.toml`
 - [ ] Without git: scope check skipped with a warning, rest still runs
-- [ ] `advance` refuses `verify → review` while any `## Acceptance` checkbox is unticked
+- [x] `advance` refuses `verify → review` while any `## Acceptance` checkbox is unticked (done in Phase 4)
 - [ ] `task new` pre-fills `## Acceptance` with `acceptance.default` as unchecked items; add `Manual checks` to default `optional_sections`
 
 Phase 6 — `task done`:
@@ -116,6 +116,11 @@ Log location: per task — a `## Log` section at the end of each `specs/tasks/<i
 - Dependency tree (runtime, unique crates; 2026-10-03): 23 → 53 after adding the Phase 1–2 set. Per-crate subtrees, overlapping: `comrak` 0.55 (defaults off) 12 — caseless, finl_unicode, jetscii, phf ×3, rustc-hash, smallvec, tinyvec, typed-arena, unicode-normalization; `toon-format` 0.5 (defaults off) 17, but all shared (serde, serde_json, indexmap, thiserror); `serde_json` 8; `toml` 1.x 7; `serde` derive 7 (syn/quote/proc-macro2 already came with thiserror); `chrono` 0.4 (clock, std) 4 — iana-time-zone + core-foundation-sys on macOS (Windows gets windows-* instead). `glob` deferred to Phase 5 (only scope-vs-changed-files matching needs it).
 - Phases 1–2 landed 2026-10-03; gate green (109 unit + 15 e2e tests, clippy `-D warnings`). Layout: `src/{md,diag,output,config}.rs`, `src/task.rs` + `src/task/{id,frontmatter,log,store,cmd}.rs`.
 - E2e coverage gaps closed 2026-10-04 (15 → 21 tests in `tests/cli.rs`): `task index`, `skill install`/`skill check` (run with `HOME` set to a tempdir via `run_env`, so tests never touch the real `~/.agents/`), and behavioral `scan`/`status` tests (markers, forbidden content, missing root files). `status` assertions pin today's exit-0-with-warnings behavior; Phase 3 changes them deliberately.
+- Phase 4 landed 2026-10-04; gate green (130 unit + 30 e2e). New: `src/task/state.rs` (`advance`, `block`, `set`, `scope add|rm`); `transition::targets`/`next`; `Status::is_active`. No new crates.
+- `advance` without `--to` takes the happy-path successor (draft → ready → implement → verify → review → approval; fix → verify); from approval and blocked `--to` is required. `--to` takes a status or a bare stage name. `--to done` points at `task done` (Phase 6), `--to blocked` at `task block`.
+- Gates (user decision 2026-10-04): no open `^^^` for draft → ready; all Plan boxes ticked for implement → verify; all Acceptance boxes ticked for verify → review; one active task. Entering fix past `max_attempts` blocks the task instead (`blocked: attempts cap reached (N)`), exit 0 with a note.
+- Safety net: every state command runs `check::task_diagnostics` before and after on a copy and refuses if the change adds errors (exact diagnostic match), so commands never write a file `check` rejects. Any `log-*` error beforehand refuses outright: the history must be repaired first.
+- `set` with an empty value clears the field and logs `set <field> ""`. `depends` values resolve through `TaskStore::find`, so `set 3 depends 1,slug` works. Scope paths can't contain `, ` or ` — ` (log separators).
 - Phase 3 landed 2026-10-04; gate green (126 unit + 26 e2e). New: `src/check.rs`, `src/task/transition.rs`; `scan`/`status` emit reports. No new crates.
 - Transition table (`transition::is_legal`): draft ⇄ ready; ready → implement; implement → verify; verify → review | fix; review → fix | approval; fix → verify; approval → fix | done; blocked → draft | ready | any stage. Blocking is the `Blocked` log event, legal from any status but done/blocked.
 - Replay rules: `created` first (title and date must match frontmatter); `scope approved` only while ready, required before ready → in-progress; `ready → draft` drops the approval; scope add/rm count only after approval (draft scope is free); `set` events are informational — `source`/`depends` aren't compared yet.
@@ -143,4 +148,4 @@ Log location: per task — a `## Log` section at the end of each `specs/tasks/<i
 - `factory.md` has no open design questions (2026-10-03); quality thresholds start as placeholders and get tuned in Phase 8 dogfooding.
 
 ## Next
-User review of Phase 3 (`specdev check` in a scratch dir: `task new`, hand-break the file, `check`). Then Phase 4 — state commands on top of `transition::is_legal`; they must produce logs that `transition::replay` accepts (add a round-trip test: command sequence → `check` passes).
+User review of Phase 4 (walk one task from `task new` to `approval` with the commands in a scratch dir). Then Phase 5 — scope check via the `git` CLI (adds `glob`), `check --staged`, and `acceptance.default` pre-fill in `task new`.

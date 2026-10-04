@@ -570,3 +570,292 @@ fn check_without_specs_dir_fails() {
     assert_eq!(code, 1);
     assert!(err.contains("specdev init"), "got {err}");
 }
+
+/// Run a command that must succeed, then `check`, which must pass too.
+fn step(dir: &Path, args: &[&str]) -> String {
+    let (out, err, code) = run(dir, args);
+    assert_eq!(code, 0, "{args:?} failed: {err}");
+    let (check, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "check failed after {args:?}:\n{check}");
+    out
+}
+
+/// Run a command that must be refused, leaving `file` unchanged.
+fn refused(dir: &Path, file: &Path, args: &[&str], why: &str) {
+    let before = fs::read_to_string(file).unwrap();
+    let (_, err, code) = run(dir, args);
+    assert_eq!(code, 1, "{args:?} should be refused");
+    assert!(err.contains(why), "{args:?}: expected {why:?}, got {err}");
+    assert_eq!(fs::read_to_string(file).unwrap(), before, "{args:?} wrote");
+}
+
+/// Replace text in a task file, as an agent editing prose would.
+fn edit(file: &Path, from: &str, to: &str) {
+    let content = fs::read_to_string(file).unwrap();
+    assert!(content.contains(from), "{from:?} not in {content}");
+    fs::write(file, content.replacen(from, to, 1)).unwrap();
+}
+
+/// `init` + `task new x` with a scope and one Plan and Acceptance item.
+fn drafted() -> (TempDir, std::path::PathBuf) {
+    let tmp = init_tmp();
+    fs::create_dir(tmp.path().join("src")).unwrap();
+    step(tmp.path(), &["task", "new", "x"]);
+    let file = tmp.path().join("specs/tasks/0001-x.md");
+    step(
+        tmp.path(),
+        &["task", "scope", "x", "add", "src/a.rs", "--reason", "core"],
+    );
+    edit(&file, "## Plan\n\n", "## Plan\n\n- [ ] build it\n\n");
+    edit(
+        &file,
+        "## Acceptance\n\n",
+        "## Acceptance\n\n- [ ] cargo test\n\n",
+    );
+    (tmp, file)
+}
+
+#[test]
+fn task_lifecycle_through_commands() {
+    let (tmp, file) = drafted();
+    let dir = tmp.path();
+
+    let out = step(dir, &["task", "advance", "x"]);
+    assert!(out.contains("0001-x — draft → ready"), "got {out}");
+    assert!(out.contains("scope approved: src/a.rs"), "got {out}");
+    step(dir, &["task", "advance", "1"]);
+    refused(
+        dir,
+        &file,
+        &["task", "advance", "x"],
+        "1 of 1 `## Plan` items unticked",
+    );
+    edit(&file, "- [ ] build it", "- [x] build it");
+    step(dir, &["task", "advance", "x"]);
+    refused(
+        dir,
+        &file,
+        &["task", "advance", "x"],
+        "`## Acceptance` items unticked",
+    );
+    let out = step(dir, &["task", "advance", "x", "--to", "fix"]);
+    assert!(out.contains("(attempts 1)"), "got {out}");
+    step(dir, &["task", "advance", "x"]);
+    edit(&file, "- [ ] cargo test", "- [x] cargo test");
+    step(dir, &["task", "advance", "x"]);
+    step(dir, &["task", "advance", "x"]);
+
+    let content = fs::read_to_string(&file).unwrap();
+    assert!(content.contains("status: approval\n"), "got {content}");
+    assert!(content.contains("attempts: 1\n"), "got {content}");
+    let log: Vec<&str> = content
+        .split("## Log\n\n")
+        .nth(1)
+        .unwrap()
+        .lines()
+        .map(|l| l.split_once(' ').unwrap().1.split_once(' ').unwrap().1)
+        .collect();
+    assert_eq!(
+        log,
+        [
+            "created: x",
+            "scope add src/a.rs — core",
+            "advance draft → ready",
+            "scope approved: src/a.rs",
+            "advance ready → in-progress/implement",
+            "advance in-progress/implement → in-progress/verify",
+            "advance in-progress/verify → in-progress/fix (attempts 1)",
+            "advance in-progress/fix → in-progress/verify",
+            "advance in-progress/verify → in-progress/review",
+            "advance in-progress/review → approval",
+        ]
+    );
+    let index = fs::read_to_string(dir.join("specs/tasks/_index.md")).unwrap();
+    assert!(index.contains("## Active"), "got {index}");
+
+    refused(
+        dir,
+        &file,
+        &["task", "advance", "x"],
+        "choose where it goes with --to",
+    );
+    refused(
+        dir,
+        &file,
+        &["task", "advance", "x", "--to", "done"],
+        "task done",
+    );
+}
+
+#[test]
+fn state_commands_refuse_bad_changes() {
+    let tmp = init_tmp();
+    let dir = tmp.path();
+    step(dir, &["task", "new", "x"]);
+    let file = dir.join("specs/tasks/0001-x.md");
+
+    // Safety net: draft → ready with empty scope/Plan/Acceptance adds errors.
+    refused(
+        dir,
+        &file,
+        &["task", "advance", "x"],
+        "would make `specdev check` fail",
+    );
+    refused(
+        dir,
+        &file,
+        &["task", "advance", "x", "--to", "fix"],
+        "can't move from `draft`",
+    );
+    refused(
+        dir,
+        &file,
+        &["task", "set", "x", "status", "ready"],
+        "use `task advance`",
+    );
+    refused(
+        dir,
+        &file,
+        &["task", "set", "x", "owner", "me"],
+        "unknown field `owner`",
+    );
+    refused(
+        dir,
+        &file,
+        &["task", "scope", "x", "add", "**", "--reason", "all"],
+        "scope-glob",
+    );
+    refused(
+        dir,
+        &file,
+        &["task", "scope", "x", "rm", "src/a.rs"],
+        "not in scope",
+    );
+    refused(
+        dir,
+        &file,
+        &["task", "set", "x", "depends", "9"],
+        "no task matching `9`",
+    );
+
+    let (tmp, file) = drafted();
+    let dir = tmp.path();
+    edit(&file, "- [ ] build it", "- [ ] build it\n\n^^^ really?");
+    refused(dir, &file, &["task", "advance", "x"], "open ^^^ remark");
+    edit(&file, "\n\n^^^ really?", "");
+
+    step(dir, &["task", "advance", "x"]);
+    step(dir, &["task", "advance", "x"]);
+    step(dir, &["task", "new", "y"]);
+    let y = dir.join("specs/tasks/0002-y.md");
+    step(
+        dir,
+        &["task", "scope", "y", "add", "src/b.rs", "--reason", "r"],
+    );
+    edit(&y, "## Plan\n\n", "## Plan\n\n- [ ] b\n\n");
+    edit(&y, "## Acceptance\n\n", "## Acceptance\n\n- [ ] t\n\n");
+    step(dir, &["task", "advance", "y"]);
+    refused(
+        dir,
+        &y,
+        &["task", "advance", "y"],
+        "`0001-x` is already active",
+    );
+
+    // A hand edit breaks the log; commands refuse until it's repaired.
+    edit(&y, "status: ready", "status: draft");
+    refused(
+        dir,
+        &y,
+        &["task", "set", "y", "source", "gh-1"],
+        "disagrees with its own log",
+    );
+}
+
+#[test]
+fn attempts_cap_blocks_the_task() {
+    let (tmp, file) = drafted();
+    let dir = tmp.path();
+    fs::write(dir.join("specdev.toml"), "[pipeline]\nmax_attempts = 1\n").unwrap();
+    edit(&file, "- [ ] build it", "- [x] build it");
+    for _ in 0..3 {
+        step(dir, &["task", "advance", "x"]);
+    }
+    step(dir, &["task", "advance", "x", "--to", "fix"]);
+    step(dir, &["task", "advance", "x"]);
+    let out = step(dir, &["task", "advance", "x", "--to", "fix"]);
+    assert!(out.contains("in-progress/verify → blocked"), "got {out}");
+    assert!(
+        out.contains("Note: not moved to fix: attempts cap reached (1)"),
+        "got {out}"
+    );
+    let content = fs::read_to_string(&file).unwrap();
+    assert!(
+        content.contains("blocked_reason: attempts cap reached (1)\n"),
+        "got {content}"
+    );
+    assert!(content.contains("attempts: 1\n"), "got {content}");
+}
+
+#[test]
+fn block_set_and_scope_commands() {
+    let (tmp, file) = drafted();
+    let dir = tmp.path();
+    step(dir, &["task", "advance", "x"]);
+
+    let out = step(
+        dir,
+        &["task", "block", "x", "--reason", "waiting on design"],
+    );
+    assert!(out.contains("ready → blocked"), "got {out}");
+    let content = fs::read_to_string(&file).unwrap();
+    assert!(content.contains("blocked_reason: waiting on design\n"));
+    refused(
+        dir,
+        &file,
+        &["task", "advance", "x"],
+        "choose where it goes with --to",
+    );
+    step(dir, &["task", "advance", "x", "--to", "ready"]);
+    let content = fs::read_to_string(&file).unwrap();
+    assert!(!content.contains("blocked_reason"), "got {content}");
+
+    step(dir, &["task", "new", "y"]);
+    step(dir, &["task", "set", "y", "source", "gh issue 12"]);
+    step(dir, &["task", "set", "y", "depends", "x"]);
+    let y = fs::read_to_string(dir.join("specs/tasks/0002-y.md")).unwrap();
+    assert!(y.contains("source: gh issue 12\n"), "got {y}");
+    assert!(y.contains("depends: [0001-x]\n"), "got {y}");
+    assert!(y.contains("set depends 0001-x\n"), "got {y}");
+    step(dir, &["task", "set", "y", "depends", ""]);
+    let y = fs::read_to_string(dir.join("specs/tasks/0002-y.md")).unwrap();
+    assert!(!y.contains("depends: ["), "got {y}");
+    assert!(y.contains("set depends \"\"\n"), "got {y}");
+
+    // After approval, scope changes are measured against the approved scope.
+    step(
+        dir,
+        &[
+            "task",
+            "scope",
+            "x",
+            "add",
+            "tests/cli.rs",
+            "--reason",
+            "e2e",
+        ],
+    );
+    step(dir, &["task", "scope", "x", "rm", "src/a.rs"]);
+    let content = fs::read_to_string(&file).unwrap();
+    assert!(content.contains("scope: [tests/cli.rs]\n"), "got {content}");
+
+    let (out, _, code) = run(
+        dir,
+        &["--format", "json", "task", "set", "y", "source", "x"],
+    );
+    assert_eq!(code, 0);
+    let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(json["id"], "0002-y");
+    assert_eq!(json["to"], "draft");
+    assert!(json["log"][0].as_str().unwrap().ends_with("set source x"));
+}

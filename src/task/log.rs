@@ -9,6 +9,9 @@ use chrono::NaiveDate;
 use super::Position;
 use super::frontmatter::{DATE_FORMAT, ParseError};
 
+/// How a `set` to an empty value (a cleared field) is written.
+const EMPTY: &str = "\"\"";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogEntry {
     pub date: NaiveDate,
@@ -70,6 +73,9 @@ impl fmt::Display for LogEvent {
             }
             Self::ScopeRemove { path } => write!(f, "scope rm {path}"),
             Self::Blocked { reason } => write!(f, "blocked: {reason}"),
+            Self::Set { field, value } if value.is_empty() => {
+                write!(f, "set {field} {EMPTY}")
+            }
             Self::Set { field, value } => write!(f, "set {field} {value}"),
         }
     }
@@ -153,6 +159,7 @@ impl FromStr for LogEvent {
         if let Some(rest) = s.strip_prefix("set ") {
             let (field, value) =
                 rest.split_once(' ').ok_or_else(|| missing("value"))?;
+            let value = if value == EMPTY { "" } else { value };
             return Ok(Self::Set {
                 field: field.to_string(),
                 value: value.to_string(),
@@ -230,6 +237,10 @@ mod tests {
             LogEvent::Set {
                 field: "source".to_string(),
                 value: "gh issue 12".to_string(),
+            },
+            LogEvent::Set {
+                field: "depends".to_string(),
+                value: String::new(),
             },
         ];
         for event in events {

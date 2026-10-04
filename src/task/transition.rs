@@ -28,6 +28,51 @@ pub fn is_legal(from: Position, to: Position) -> bool {
     )
 }
 
+/// Every position, in workflow order.
+fn all_positions() -> Vec<Position> {
+    use Stage::*;
+    use Status::*;
+    let at = |status, stage| Position { status, stage };
+    vec![
+        at(Draft, None),
+        at(Ready, None),
+        at(InProgress, Some(Implement)),
+        at(InProgress, Some(Verify)),
+        at(InProgress, Some(Review)),
+        at(InProgress, Some(Fix)),
+        at(Approval, None),
+        at(Done, None),
+        at(Blocked, None),
+    ]
+}
+
+/// The positions `advance` may move to from `from`.
+pub fn targets(from: Position) -> Vec<Position> {
+    all_positions()
+        .into_iter()
+        .filter(|&to| is_legal(from, to))
+        .collect()
+}
+
+/// The happy-path successor `advance` takes without `--to`. `None` where the
+/// move is a decision (approval, blocked) or there is nowhere to go (done).
+pub fn next(from: Position) -> Option<Position> {
+    use Stage::*;
+    use Status::*;
+    let to = match (from.status, from.stage) {
+        (Draft, _) => (Ready, None),
+        (Ready, _) => (InProgress, Some(Implement)),
+        (InProgress, Some(Implement | Fix)) => (InProgress, Some(Verify)),
+        (InProgress, Some(Verify)) => (InProgress, Some(Review)),
+        (InProgress, Some(Review)) => (Approval, None),
+        _ => return None,
+    };
+    Some(Position {
+        status: to.0,
+        stage: to.1,
+    })
+}
+
 /// Whether a task in `status` may be blocked.
 pub fn can_block(status: Status) -> bool {
     !matches!(status, Status::Done | Status::Blocked)
@@ -267,6 +312,33 @@ mod tests {
         }
         assert!(!can_block(Status::Done));
         assert!(can_block(Status::Approval));
+    }
+
+    #[test]
+    fn targets_and_default_successor() {
+        let show = |ps: Vec<Position>| -> Vec<String> {
+            ps.iter().map(ToString::to_string).collect()
+        };
+        assert_eq!(
+            show(targets(pos("in-progress/verify"))),
+            ["in-progress/review", "in-progress/fix"]
+        );
+        assert_eq!(show(targets(pos("approval"))), ["in-progress/fix", "done"]);
+        assert!(targets(pos("done")).is_empty());
+
+        // Every default successor is legal; decisions have none.
+        for p in all_positions() {
+            if let Some(n) = next(p) {
+                assert!(is_legal(p, n), "{p} → {n}");
+            }
+        }
+        assert_eq!(
+            next(pos("in-progress/fix")),
+            Some(pos("in-progress/verify"))
+        );
+        assert_eq!(next(pos("approval")), None);
+        assert_eq!(next(pos("blocked")), None);
+        assert_eq!(next(pos("done")), None);
     }
 
     #[test]

@@ -91,6 +91,50 @@ enum TaskCommands {
     },
     /// Regenerate specs/tasks/_index.md
     Index,
+    /// Move a task to its next status/stage, or to one named with --to
+    Advance {
+        /// Task id, sequence number, or slug
+        id: String,
+        /// Target: draft, ready, approval, or a stage (implement, verify, review, fix)
+        #[arg(long)]
+        to: Option<String>,
+    },
+    /// Block a task; the human decides where it goes next
+    Block {
+        /// Task id, sequence number, or slug
+        id: String,
+        /// Why the task can't proceed
+        #[arg(long)]
+        reason: String,
+    },
+    /// Set a plain frontmatter field: source, depends, or a configured extra field
+    Set {
+        /// Task id, sequence number, or slug
+        id: String,
+        field: String,
+        /// New value; "" clears. depends takes comma-separated task ids
+        value: String,
+    },
+    /// Add or remove a scope entry; every change is logged
+    Scope {
+        /// Task id, sequence number, or slug
+        id: String,
+        #[command(subcommand)]
+        action: ScopeAction,
+    },
+}
+
+#[derive(Subcommand, Debug, PartialEq)]
+enum ScopeAction {
+    /// Add a file or glob to the task's scope
+    Add {
+        path: String,
+        /// Why the task needs it
+        #[arg(long)]
+        reason: String,
+    },
+    /// Remove a scope entry
+    Rm { path: String },
 }
 
 #[derive(Subcommand, Debug, PartialEq)]
@@ -128,6 +172,23 @@ fn main() {
                 TaskCommands::List => task::cmd::list(root, format),
                 TaskCommands::Show { id } => task::cmd::show(root, &id, format),
                 TaskCommands::Index => task::cmd::index(root, format),
+                TaskCommands::Advance { id, to } => {
+                    task::state::advance(root, &id, to.as_deref(), format)
+                }
+                TaskCommands::Block { id, reason } => {
+                    task::state::block(root, &id, &reason, format)
+                }
+                TaskCommands::Set { id, field, value } => {
+                    task::state::set(root, &id, &field, &value, format)
+                }
+                TaskCommands::Scope { id, action } => match action {
+                    ScopeAction::Add { path, reason } => {
+                        task::state::scope_add(root, &id, &path, &reason, format)
+                    }
+                    ScopeAction::Rm { path } => {
+                        task::state::scope_rm(root, &id, &path, format)
+                    }
+                },
             }
         }
     };
@@ -166,6 +227,43 @@ mod tests {
     #[test]
     fn parses_check() {
         assert!(matches!(cli(&["check"]).unwrap(), Commands::Check));
+    }
+
+    #[test]
+    fn parses_task_state_commands() {
+        let task = |args: &[&str]| match cli(args).unwrap() {
+            Commands::Task { command } => command,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            task(&["task", "advance", "3", "--to", "fix"]),
+            TaskCommands::Advance {
+                id: "3".into(),
+                to: Some("fix".into())
+            }
+        );
+        assert_eq!(
+            task(&["task", "scope", "3", "add", "src/a.rs", "--reason", "r"]),
+            TaskCommands::Scope {
+                id: "3".into(),
+                action: ScopeAction::Add {
+                    path: "src/a.rs".into(),
+                    reason: "r".into()
+                }
+            }
+        );
+        assert_eq!(
+            task(&["task", "set", "3", "source", ""]),
+            TaskCommands::Set {
+                id: "3".into(),
+                field: "source".into(),
+                value: String::new()
+            }
+        );
+        assert!(
+            cli(&["task", "block", "3"]).is_err(),
+            "--reason is required"
+        );
     }
 
     #[test]

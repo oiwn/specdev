@@ -73,7 +73,7 @@ fn check_store(
     let active: Vec<&Task> = store
         .tasks
         .iter()
-        .filter(|t| is_active(t.front.status))
+        .filter(|t| t.front.status.is_active())
         .collect();
     if active.len() > 1 {
         let ids: Vec<String> =
@@ -112,6 +112,17 @@ fn check_store(
         ));
     }
     Ok(diags)
+}
+
+/// The per-task rules for an open task; state commands run it before and
+/// after a change and refuse changes that add errors.
+pub fn task_diagnostics(
+    task: &Task,
+    store: &TaskStore,
+    config: &Config,
+    root: &Path,
+) -> Vec<Diagnostic> {
+    check_task(task, store, config, root, false)
 }
 
 fn check_task(
@@ -330,7 +341,7 @@ fn ctx_task_refs(
                 continue;
             };
             if let Some(task) = store.find(&id.to_string())
-                && !is_active(task.front.status)
+                && !task.front.status.is_active()
             {
                 diags.push(Diagnostic::warning(
                     &path,
@@ -345,10 +356,6 @@ fn ctx_task_refs(
         }
     }
     Ok(diags)
-}
-
-fn is_active(status: Status) -> bool {
-    matches!(status, Status::InProgress | Status::Approval)
 }
 
 #[derive(Serialize)]

@@ -6,6 +6,7 @@ pub mod cmd;
 mod frontmatter;
 mod id;
 mod log;
+pub mod state;
 mod store;
 pub mod transition;
 
@@ -67,6 +68,13 @@ str_enum!(Status, "status" {
     Done => "done",
     Blocked => "blocked",
 });
+
+impl Status {
+    /// The one task being worked on: in progress, or waiting for the human.
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::InProgress | Self::Approval)
+    }
+}
 
 str_enum!(Stage, "stage" {
     Implement => "implement",
