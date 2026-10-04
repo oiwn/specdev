@@ -7,6 +7,7 @@ specdev is a small Rust CLI plus a bundled agent skill. The CLI scaffolds, inspe
 - `src/main.rs` — clap CLI: `init`, `scan`, `status`, `check`, `list`, `skill`, `task`; global `--format text|json|toon`; crate-level `Error`.
 - `src/md.rs` — the shared Markdown parser (comrak): headings, checkboxes, sections, code-block awareness. All Markdown analysis goes through it.
 - `src/diag.rs` — `Diagnostic` (file, line, severity, stable code, message).
+- `src/quality.rs` — spec quality gate: `Metrics` per file (also behind `list --stats`) and `[quality.*]` thresholds, reported by `check`.
 - `src/output.rs` — `Format` and the `Report` trait; renders every migrated command as text, JSON, or TOON.
 - `src/config.rs` — `specdev.toml` (task contract, pipeline, acceptance, quality) with built-in defaults.
 - `src/task.rs` — `Task`, `Status`, `Stage`; parse and `render()` (frontmatter + `## Log` regenerated, body byte-for-byte).

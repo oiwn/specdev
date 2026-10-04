@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::Error;
 use crate::md;
 use crate::output::{self, Format, Report};
-use crate::scan;
+use crate::quality::{self, Metrics};
 
 /// Canonical display order for the core spec files; any others follow alphabetically.
 const CANONICAL_ORDER: [&str; 5] = [
@@ -91,8 +91,8 @@ struct FileStats {
     h4_plus: usize,
     checked: usize,
     unchecked: usize,
-    open_remarks: usize,
-    words: usize,
+    #[serde(flatten)]
+    metrics: Metrics,
 }
 
 impl Report for StatsReport {
@@ -101,12 +101,24 @@ impl Report for StatsReport {
             return "No spec files found in specs/".to_string();
         }
         let mut out = format!(
-            "{:<16} {:>2} {:>2} {:>2} {:>3} {:>4} {:>4} {:>5} {:>6}",
-            "File", "H1", "H2", "H3", "H4+", "[x]", "[ ]", "^^^", "words"
+            "{:<16} {:>2} {:>2} {:>2} {:>3} {:>4} {:>4} {:>5} {:>6} {:>5} {:>4} {:>3}",
+            "File",
+            "H1",
+            "H2",
+            "H3",
+            "H4+",
+            "[x]",
+            "[ ]",
+            "^^^",
+            "words",
+            "lines",
+            "code",
+            "tbl"
         );
         for s in &self.files {
+            let m = &s.metrics;
             out.push_str(&format!(
-                "\n{:<16} {:>2} {:>2} {:>2} {:>3} {:>4} {:>4} {:>5} {:>6}",
+                "\n{:<16} {:>2} {:>2} {:>2} {:>3} {:>4} {:>4} {:>5} {:>6} {:>5} {:>4} {:>3}",
                 s.file,
                 s.h1,
                 s.h2,
@@ -114,8 +126,11 @@ impl Report for StatsReport {
                 s.h4_plus,
                 s.checked,
                 s.unchecked,
-                s.open_remarks,
-                s.words
+                m.open_remarks,
+                m.words,
+                m.lines,
+                m.code_blocks,
+                m.tables + m.diagrams
             ));
         }
         out
@@ -129,7 +144,6 @@ fn stats_report(specs_dir: &Path, files: &[String]) -> Result<StatsReport, Error
         let outline = md::outline(&content);
         let (h1, h2, h3, h4_plus) = outline.heading_counts();
         let (checked, total) = outline.checkbox_counts();
-        let (open_remarks, _resolved) = scan::count_markers(&content);
         stats.push(FileStats {
             file: name.clone(),
             h1,
@@ -138,8 +152,7 @@ fn stats_report(specs_dir: &Path, files: &[String]) -> Result<StatsReport, Error
             h4_plus,
             checked,
             unchecked: total - checked,
-            open_remarks,
-            words: content.split_whitespace().count(),
+            metrics: quality::measure_with(&content, &outline),
         });
     }
     Ok(StatsReport { files: stats })

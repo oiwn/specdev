@@ -12,6 +12,7 @@ use crate::config::Config;
 use crate::diag::{Diagnostic, Severity};
 use crate::md;
 use crate::output::{self, Format, Report};
+use crate::quality;
 use crate::status;
 use crate::task::{INDEX_FILE, Status, TASKS_DIR, Task, TaskId, TaskStore};
 use crate::task::{done, transition};
@@ -36,6 +37,7 @@ pub fn run(root: &Path, staged: bool, format: Format) -> Result<(), Error> {
         diagnostics.extend(scope_check(store, &config, root, staged));
     }
     diagnostics.extend(status::spec_diagnostics(root)?);
+    diagnostics.extend(quality::spec_diagnostics(root, &config)?);
     diagnostics.extend(ctx_task_refs(root, store.as_ref())?);
 
     let errors = diagnostics
@@ -196,6 +198,13 @@ fn check_task(
     if !archived && front.status != Status::Done {
         diags.extend(completeness(task, &outline));
         diags.extend(scope_lint(task, root));
+        diags.extend(quality::diagnostics(
+            &task.path,
+            &task.render(),
+            quality::Kind::Task,
+            Some(front.scope.len()),
+            config,
+        ));
     }
     if front.status == Status::Approval && done::summary(task).is_none() {
         diags.push(Diagnostic::warning(

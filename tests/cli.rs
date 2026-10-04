@@ -1137,3 +1137,86 @@ fn task_done_archives_and_writes_changelog() {
     );
     assert!(at_y < at_x, "newest entry first: {log}");
 }
+
+#[test]
+fn quality_gate_in_check() {
+    let tmp = init_tmp();
+    let dir = tmp.path();
+    fs::create_dir(dir.join("src")).unwrap();
+    step(dir, &["task", "new", "x"]);
+    let file = dir.join("specs/tasks/0001-x.md");
+    let steps: String = (0..9).map(|i| format!("- [ ] step {i}\n")).collect();
+    edit(&file, "## Plan\n\n", &format!("## Plan\n\n{steps}\n"));
+
+    // Warnings by default: check passes.
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(
+        out.contains(
+            "warning[quality-plan-steps]: 9 plan steps (max 8 for task files)"
+        ),
+        "got {out}"
+    );
+
+    // Errors when configured; the safety net then refuses growing scope.
+    let config = "[quality]\nerrors = true\n\n[quality.task]\nmax_scope = 1\n";
+    fs::write(dir.join("specdev.toml"), config).unwrap();
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 1, "got {out}");
+    assert!(out.contains("error[quality-plan-steps]"), "got {out}");
+    let (_, err, code) = run(
+        dir,
+        &["task", "scope", "x", "add", "src/a.rs", "--reason", "r"],
+    );
+    assert_eq!(code, 0, "first entry is within max_scope: {err}");
+    refused(
+        dir,
+        &file,
+        &["task", "scope", "x", "add", "src/b.rs", "--reason", "r"],
+        "quality-scope",
+    );
+}
+
+#[test]
+fn quality_gate_for_spec_files() {
+    let tmp = init_tmp();
+    let dir = tmp.path();
+    let changelog = dir.join("CHANGELOG.md");
+    let mut content = fs::read_to_string(&changelog).unwrap();
+    content.push_str(&"- old entry line\n".repeat(400));
+    fs::write(&changelog, content).unwrap();
+    fs::write(
+        dir.join("specs/ideas.md"),
+        "# Ideas\n\n| idea | why |\n|---|---|\n| a | b |\n",
+    )
+    .unwrap();
+
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(
+        out.contains("CHANGELOG.md: warning[quality-lines]"),
+        "got {out}"
+    );
+    assert!(out.contains("compress older entries"), "got {out}");
+    assert!(
+        !out.contains("md-table"),
+        "tables are allowed by default: {out}"
+    );
+
+    fs::write(
+        dir.join("specdev.toml"),
+        "[quality]\nforbid_tables = true\n",
+    )
+    .unwrap();
+    let (out, _, _) = run(dir, &["check"]);
+    assert!(
+        out.contains("specs/ideas.md:3: warning[md-table]"),
+        "got {out}"
+    );
+
+    let (out, _, code) = run(dir, &["list", "--stats"]);
+    assert_eq!(code, 0);
+    for col in ["lines", "code", "tbl"] {
+        assert!(out.contains(col), "stats header missing {col}: {out}");
+    }
+}

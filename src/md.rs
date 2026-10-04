@@ -26,7 +26,10 @@ pub struct Outline {
     pub checkboxes: Vec<Checkbox>,
     /// Line ranges (1-based, inclusive) covered by code blocks, fences included.
     pub code_blocks: Vec<RangeInclusive<usize>>,
-    pub tables: usize,
+    /// First line of each table.
+    pub tables: Vec<usize>,
+    /// First line of each code block that draws a box diagram.
+    pub diagrams: Vec<usize>,
     pub lines: usize,
 }
 
@@ -58,10 +61,13 @@ pub fn outline(content: &str) -> Outline {
                     line: start,
                 })
             }
-            NodeValue::CodeBlock(_) => {
-                out.code_blocks.push(start..=ast.sourcepos.end.line)
+            NodeValue::CodeBlock(block) => {
+                out.code_blocks.push(start..=ast.sourcepos.end.line);
+                if is_diagram(&block.info, &block.literal) {
+                    out.diagrams.push(start);
+                }
             }
-            NodeValue::Table(_) => out.tables += 1,
+            NodeValue::Table(_) => out.tables.push(start),
             _ => {}
         }
     }
@@ -124,6 +130,31 @@ impl Outline {
     pub fn is_in_code(&self, line: usize) -> bool {
         self.code_blocks.iter().any(|r| r.contains(&line))
     }
+
+    /// Number of `##` sections.
+    pub fn sections(&self) -> usize {
+        self.headings.iter().filter(|h| h.level == 2).count()
+    }
+
+    /// Deepest heading level used (0 without headings).
+    pub fn max_depth(&self) -> u8 {
+        self.headings.iter().map(|h| h.level).max().unwrap_or(0)
+    }
+}
+
+/// A plain-text code block (no language, or `text`/`txt`/`ascii`) that draws
+/// boxes: box-drawing characters or ASCII box edges. Arrows alone, like the
+/// `→` in log examples, don't make a diagram.
+fn is_diagram(info: &str, literal: &str) -> bool {
+    let lang = info.split_whitespace().next().unwrap_or("");
+    if !matches!(lang, "" | "text" | "txt" | "ascii") {
+        return false;
+    }
+    literal
+        .chars()
+        .any(|c| ('\u{2500}'..='\u{257F}').contains(&c))
+        || literal.contains("+--")
+        || literal.contains("--+")
 }
 
 fn count<'a>(boxes: impl Iterator<Item = &'a Checkbox>) -> (usize, usize) {
@@ -222,8 +253,42 @@ mod tests {
     }
 
     #[test]
-    fn counts_tables() {
-        let o = outline("| a | b |\n|---|---|\n| 1 | 2 |\n");
-        assert_eq!(o.tables, 1);
+    fn tables_by_line() {
+        let o = outline("intro\n\n| a | b |\n|---|---|\n| 1 | 2 |\n");
+        assert_eq!(o.tables, vec![3]);
+    }
+
+    #[test]
+    fn diagrams_in_plain_code_blocks() {
+        let content = "\
+```
+┌───┐
+│ a │
+└───┘
+```
+
+```text
++---+
+| b |
++---+
+```
+
+```rust
+let s = \"+--\";
+```
+
+```
+- 2026-10-04 advance ready → in-progress/implement
+```
+";
+        let o = outline(content);
+        assert_eq!(o.diagrams, vec![1, 7]);
+    }
+
+    #[test]
+    fn sections_and_depth() {
+        let o = outline("# A\n\n## B\n\n### C\n\n## D\n");
+        assert_eq!((o.sections(), o.max_depth()), (2, 3));
+        assert_eq!(outline("text\n").max_depth(), 0);
     }
 }

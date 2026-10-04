@@ -9,6 +9,7 @@ mod init;
 mod list;
 mod md;
 mod output;
+mod quality;
 mod scan;
 mod skill;
 mod status;

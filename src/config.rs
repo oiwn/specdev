@@ -32,10 +32,24 @@ default = []
 # Globs never flagged as out of scope, e.g. ["Cargo.lock"]. specs/ is always allowed.
 always_allowed = []
 
+[quality]
+# Threshold violations are warnings; true makes them errors.
+errors = false
+# Flag Markdown tables and ASCII box diagrams in specs/ and task files.
+forbid_tables = false
+
+# Per file kind. Keys: max_lines, max_words, max_plan_steps, max_scope.
+# Omitted keys keep these defaults; 0 turns a limit off.
 [quality.task]
+max_lines = 150
 max_plan_steps = 8
 max_scope = 6
-max_lines = 150
+
+[quality.ctx]
+max_lines = 120
+
+[quality.overview]
+max_lines = 200
 
 [quality.changelog]
 max_lines = 400
@@ -79,18 +93,71 @@ pub struct ScopeConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(from = "RawQuality")]
 pub struct Quality {
+    /// Report threshold violations as errors instead of warnings.
+    pub errors: bool,
+    /// Flag Markdown tables and ASCII box diagrams.
+    pub forbid_tables: bool,
     pub task: Limits,
+    pub ctx: Limits,
+    pub overview: Limits,
     pub changelog: Limits,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
-    pub max_plan_steps: Option<u32>,
-    pub max_scope: Option<u32>,
-    pub max_lines: Option<u32>,
+    pub max_lines: Option<usize>,
+    pub max_words: Option<usize>,
+    pub max_plan_steps: Option<usize>,
+    pub max_scope: Option<usize>,
+}
+
+impl Limits {
+    fn lines(max: usize) -> Self {
+        Self {
+            max_lines: Some(max),
+            ..Self::default()
+        }
+    }
+
+    /// Keys set here win; the rest come from `defaults`.
+    fn or(self, defaults: Self) -> Self {
+        Self {
+            max_lines: self.max_lines.or(defaults.max_lines),
+            max_words: self.max_words.or(defaults.max_words),
+            max_plan_steps: self.max_plan_steps.or(defaults.max_plan_steps),
+            max_scope: self.max_scope.or(defaults.max_scope),
+        }
+    }
+}
+
+/// `[quality]` as written: a kind's table may set only some keys, and the
+/// others keep their defaults (instead of becoming "no limit").
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawQuality {
+    errors: bool,
+    forbid_tables: bool,
+    task: Limits,
+    ctx: Limits,
+    overview: Limits,
+    changelog: Limits,
+}
+
+impl From<RawQuality> for Quality {
+    fn from(raw: RawQuality) -> Self {
+        let d = Quality::default();
+        Self {
+            errors: raw.errors,
+            forbid_tables: raw.forbid_tables,
+            task: raw.task.or(d.task),
+            ctx: raw.ctx.or(d.ctx),
+            overview: raw.overview.or(d.overview),
+            changelog: raw.changelog.or(d.changelog),
+        }
+    }
 }
 
 impl Default for TaskDef {
@@ -121,15 +188,16 @@ impl Default for Pipeline {
 impl Default for Quality {
     fn default() -> Self {
         Self {
+            errors: false,
+            forbid_tables: false,
             task: Limits {
                 max_plan_steps: Some(8),
                 max_scope: Some(6),
-                max_lines: Some(150),
+                ..Limits::lines(150)
             },
-            changelog: Limits {
-                max_lines: Some(400),
-                ..Limits::default()
-            },
+            ctx: Limits::lines(120),
+            overview: Limits::lines(200),
+            changelog: Limits::lines(400),
         }
     }
 }
@@ -173,6 +241,19 @@ mod tests {
     fn unknown_keys_are_rejected() {
         assert!(Config::parse("[pipeline]\nstages = [\"x\"]\n").is_err());
         assert!(Config::parse("[scope]\nallow = [\"x\"]\n").is_err());
+    }
+
+    #[test]
+    fn quality_tables_keep_defaults_for_omitted_keys() {
+        let c = Config::parse(
+            "[quality.task]\nmax_scope = 1\n\n[quality.ctx]\nmax_lines = 0\n",
+        )
+        .unwrap();
+        assert_eq!(c.quality.task.max_scope, Some(1));
+        assert_eq!(c.quality.task.max_plan_steps, Some(8), "default kept");
+        assert_eq!(c.quality.ctx.max_lines, Some(0), "0 turns it off");
+        assert_eq!(c.quality.changelog, Quality::default().changelog);
+        assert!(Config::parse("[quality]\nstrict = true\n").is_err());
     }
 
     #[test]

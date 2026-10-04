@@ -153,7 +153,7 @@ Layout:
 specdev measures spec and task files and checks them against thresholds, so "is this spec any good" has a mechanical first answer before a human reads it.
 
 - **Metrics** (extends today's `specdev list --stats`): line and word count, number of sections, heading depth, plan steps, `scope` size, code snippets present, tables/ASCII diagrams present, open `^^^`.
-- **Thresholds** live in `specdev.toml`, per file kind (task, ctx, overview, changelog). Exceeding one is a warning by default, an error if configured.
+- **Thresholds** live in `specdev.toml`, per file kind (task, ctx, overview, changelog): `max_lines`, `max_words`, `max_plan_steps`, `max_scope`. Exceeding one is a warning by default, an error with `[quality] errors = true`. `forbid_tables` adds the no-tables/no-diagrams rule for every spec and task file.
 - **Task size target: one commit.** A task should be small enough to land as a single commit whose changed files all sit inside `scope`. The gate flags tasks likely too big (many plan steps, large scope); thresholds start loose and get tuned from real use.
 - **CHANGELOG size.** `CHANGELOG.md` is under git, so old entries can be compressed safely. The gate warns when it passes a size threshold; the agent then compresses older entries (a prose edit). History stays recoverable from git.
 
@@ -173,10 +173,23 @@ max_attempts = 3          # entries into `fix` before auto-blocked
 [acceptance]
 default = ["cargo test", "cargo clippy --all-targets -- -D warnings"]
 
-[quality.task]
+[scope]
+always_allowed = []       # globs never counted against a task's scope
+
+[quality]
+errors = false            # true: threshold violations fail `check`
+forbid_tables = false     # flag Markdown tables and ASCII box diagrams
+
+[quality.task]            # omitted keys keep defaults; 0 turns a limit off
+max_lines = 150
 max_plan_steps = 8
 max_scope = 6
-max_lines = 150
+
+[quality.ctx]
+max_lines = 120
+
+[quality.overview]
+max_lines = 200
 
 [quality.changelog]
 max_lines = 400

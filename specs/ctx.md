@@ -9,8 +9,8 @@ Phase 6 — `task done`:
 - [x] Requires status `approval`; moves file to `specs/tasks/done/`, appends a dated entry to `CHANGELOG.md` (title + source + one-line summary), regenerates `_index.md`
 
 Phase 7 — quality gate + `fmt`:
-- [ ] `Metrics` per file (extends `list --stats`): lines, words, sections, max heading depth, plan steps, scope size, code blocks, tables, open `^^^`
-- [ ] Thresholds from `[quality.*]`; reported by `check` as warnings (errors if configured); CHANGELOG size warning
+- [x] `Metrics` per file (extends `list --stats`): lines, words, sections, max heading depth, plan steps, scope size, code blocks, tables, open `^^^`
+- [x] Thresholds from `[quality.*]`; reported by `check` as warnings (errors if configured); CHANGELOG size warning
 - [ ] `fmt [<file>...]`: unwrap hard-wrapped paragraphs/bullets to soft wraps, normalize list markers and blank lines around headings; leave code blocks, frontmatter, `^^^`/`&&&` lines alone; `check` flags unformatted files
 
 Phase 8 — skill, docs, dogfood:
@@ -22,11 +22,7 @@ Each phase ends green: `cargo build && cargo test && cargo clippy --all-targets 
 
 ## Data types
 
-Task, frontmatter, log, config, and diagnostic types are implemented (`src/task.rs`, `src/task/*`, `src/config.rs`, `src/diag.rs`); the per-task `## Log` format is documented in `src/task/log.rs` and `factory.md`. Still ahead, for Phase 7:
-
-```rust
-struct Metrics { lines, words, sections, max_depth, plan_steps, scope_len, code_blocks, tables, open_remarks: usize }
-```
+All planned types are implemented: tasks, frontmatter, and log (`src/task.rs`, `src/task/*`), config (`src/config.rs`), diagnostics (`src/diag.rs`), and `Metrics` (`src/quality.rs`). The per-task `## Log` format is documented in `src/task/log.rs` and `factory.md`.
 
 ## Findings
 - Dependency tree (runtime, unique crates; 2026-10-03): 23 → 53 after adding the Phase 1–2 set. Per-crate subtrees, overlapping: `comrak` 0.55 (defaults off) 12 — caseless, finl_unicode, jetscii, phf ×3, rustc-hash, smallvec, tinyvec, typed-arena, unicode-normalization; `toon-format` 0.5 (defaults off) 17, but all shared (serde, serde_json, indexmap, thiserror); `serde_json` 8; `toml` 1.x 7; `serde` derive 7 (syn/quote/proc-macro2 already came with thiserror); `chrono` 0.4 (clock, std) 4 — iana-time-zone + core-foundation-sys on macOS (Windows gets windows-* instead). `glob` 0.3 added in Phase 5 (2026-10-04): +1 crate, no dependencies of its own; `globset` rejected (regex + aho-corasick).
@@ -39,6 +35,9 @@ struct Metrics { lines, words, sections, max_depth, plan_steps, scope_len, code_
 - `task done` (`src/task/done.rs`, user decisions 2026-10-04): only from `approval`; refuses while `## Manual checks` (if present) has unticked boxes; the CHANGELOG summary is the first prose line of `## Summary` (list marker dropped; code, sub-headings, `^^^`/`&&&` skipped), refused when missing. `check` warns `summary-missing` on approval tasks so the agent fills it before handing over, and errors `not-archived` on a `done` task outside `done/`.
 - `task done` write order: archived file → remove old → `CHANGELOG.md` → `_index.md`; everything is computed and checked before the first write. The entry (`## <date> — <title>`, summary bullet, `Task \`<id>\`; source: …`) goes above the first level-2 heading outside code/HTML blocks, so it lands under the init template comment; the rest of the file stays byte-for-byte.
 - `check::task_diagnostics` decides "archived" from the file's location, so the safety net checks `task done`'s moved file as an archived task.
+- Quality gate (`src/quality.rs`, 7a done 2026-10-04): kinds task (open task files), ctx, overview, changelog, plus other `specs/*.md` (table rule only). Default limits: task 150 lines / 8 plan steps / 6 scope; ctx 120 lines; overview 200; changelog 400. Codes `quality-lines`, `quality-words`, `quality-plan-steps`, `quality-scope`, `md-table`, `ascii-diagram`; warnings unless `[quality] errors = true`. Task quality runs inside `check_task`, so with `errors = true` the safety net refuses e.g. a `scope add` past `max_scope`.
+- `[quality.<kind>]` keys you omit keep their defaults; `0` turns a limit off (`RawQuality` + `serde(from)`). Plain serde would have turned omitted keys into "no limit" as soon as a kind's table appeared — caught by the e2e test.
+- Diagram heuristic (`md::Outline::diagrams`): a code block with no language or `text`/`txt`/`ascii` that contains box-drawing characters (U+2500–U+257F) or `+--`/`--+`. Arrows alone (`→` in log examples) don't count. `forbid_tables` is off by default; this repo's `specdev.toml` (added 2026-10-04) turns it on.
 - `check` codes: `frontmatter`/`title`/`log` (parse), `id-filename`, `stage`, `blocked-reason`, `done-status`, `section-missing`, `depends`, `scope-empty`, `plan-empty`, `acceptance-empty`, `scope-glob`, `scope-path` (warning), `log-missing`, `log-created`, `log-title`, `log-transition`, `log-attempts`, `log-scope`, `log-mismatch`, `active-tasks`, `index-stale`, `ctx-all-done`, `ctx-forbidden`, `root-file-missing`, `ctx-task-inactive` (warnings).
 - Completeness (`scope-empty`, `plan-empty`, `acceptance-empty`) is a warning in draft and blocked, an error otherwise (user decision 2026-10-04). A missing `_index.md` is fine while there are no tasks (`init` doesn't write one).
 - Log diagnostics have no line numbers: `LogEntry` doesn't keep its source line. Follow-up if agents need them.
@@ -65,4 +64,4 @@ struct Metrics { lines, words, sections, max_depth, plan_steps, scope_len, code_
 - `factory.md` has no open design questions (2026-10-03); quality thresholds start as placeholders and get tuned in Phase 8 dogfooding.
 
 ## Next
-User review of Phase 6 (walk a task from `task new` to `task done` in a scratch dir; read the CHANGELOG entry). Then Phase 7 — quality gate (`Metrics`, `[quality.*]` thresholds in `check`) and `specdev fmt`.
+7a (quality gate) is done; commit it. Then 7b — `specdev fmt` with AST-guided splices (`md::fmt_facts` + `src/fmt.rs`), the `unformatted` warning in `check`, and a dogfood `fmt` run on this repo's specs.
