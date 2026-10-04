@@ -16,7 +16,7 @@ pub const DEFAULT_TOML: &str = r#"# specdev project config.
 [task]
 # Sections every task file must have; `task new` creates them.
 required_sections = ["Plan", "Acceptance"]
-optional_sections = ["Manual checks", "Context", "Findings", "Review", "Spec updates"]
+optional_sections = ["Summary", "Manual checks", "Context", "Findings", "Review", "Spec updates"]
 # Project-specific optional frontmatter fields.
 extra_fields = []
 
@@ -100,6 +100,7 @@ impl Default for TaskDef {
         Self {
             required_sections: strings(&["Plan", "Acceptance"]),
             optional_sections: strings(&[
+                "Summary",
                 "Manual checks",
                 "Context",
                 "Findings",

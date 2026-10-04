@@ -6,7 +6,7 @@ State: in progress (started 2026-10-02)
 Design and Phases 1–5 are done (CHANGELOG.md, 2026-10-03 and 2026-10-04).
 
 Phase 6 — `task done`:
-- [ ] Requires status `approval`; moves file to `specs/tasks/done/`, appends a dated entry to `CHANGELOG.md` (title + source + one-line summary), regenerates `_index.md`
+- [x] Requires status `approval`; moves file to `specs/tasks/done/`, appends a dated entry to `CHANGELOG.md` (title + source + one-line summary), regenerates `_index.md`
 
 Phase 7 — quality gate + `fmt`:
 - [ ] `Metrics` per file (extends `list --stats`): lines, words, sections, max heading depth, plan steps, scope size, code blocks, tables, open `^^^`
@@ -32,10 +32,13 @@ struct Metrics { lines, words, sections, max_depth, plan_steps, scope_len, code_
 - Dependency tree (runtime, unique crates; 2026-10-03): 23 → 53 after adding the Phase 1–2 set. Per-crate subtrees, overlapping: `comrak` 0.55 (defaults off) 12 — caseless, finl_unicode, jetscii, phf ×3, rustc-hash, smallvec, tinyvec, typed-arena, unicode-normalization; `toon-format` 0.5 (defaults off) 17, but all shared (serde, serde_json, indexmap, thiserror); `serde_json` 8; `toml` 1.x 7; `serde` derive 7 (syn/quote/proc-macro2 already came with thiserror); `chrono` 0.4 (clock, std) 4 — iana-time-zone + core-foundation-sys on macOS (Windows gets windows-* instead). `glob` 0.3 added in Phase 5 (2026-10-04): +1 crate, no dependencies of its own; `globset` rejected (regex + aho-corasick).
 - Transition table (`transition::is_legal`): draft ⇄ ready; ready → implement; implement → verify; verify → review | fix; review → fix | approval; fix → verify; approval → fix | done; blocked → draft | ready | any stage. Blocking is the `Blocked` log event, legal from any status but done/blocked.
 - Replay rules: `created` first (title and date must match frontmatter); `scope approved` only while ready, required before ready → in-progress; `ready → draft` drops the approval; scope add/rm count only after approval (draft scope is free); `set` events are informational — `source`/`depends` aren't compared yet.
-- `advance` without `--to` takes the happy-path successor (draft → ready → implement → verify → review → approval; fix → verify); from approval and blocked `--to` is required. `--to` takes a status or a bare stage name. `--to done` points at `task done` (Phase 6), `--to blocked` at `task block`.
+- `advance` without `--to` takes the happy-path successor (draft → ready → implement → verify → review → approval; fix → verify); from approval and blocked `--to` is required. `--to` takes a status or a bare stage name. `--to done` points at `task done`, `--to blocked` at `task block`.
 - Gates (user decision 2026-10-04): no open `^^^` for draft → ready; all Plan boxes ticked for implement → verify; all Acceptance boxes ticked for verify → review; one active task. Entering fix past `max_attempts` blocks the task instead (`blocked: attempts cap reached (N)`), exit 0 with a note.
 - Safety net: every state command runs `check::task_diagnostics` before and after on a copy and refuses if the change adds errors (exact diagnostic match), so commands never write a file `check` rejects. Any `log-*` error beforehand refuses outright: the history must be repaired first.
 - `set` with an empty value clears the field and logs `set <field> ""`. `depends` values resolve through `TaskStore::find`, so `set 3 depends 1,slug` works. Scope paths can't contain `, ` or ` — ` (log separators).
+- `task done` (`src/task/done.rs`, user decisions 2026-10-04): only from `approval`; refuses while `## Manual checks` (if present) has unticked boxes; the CHANGELOG summary is the first prose line of `## Summary` (list marker dropped; code, sub-headings, `^^^`/`&&&` skipped), refused when missing. `check` warns `summary-missing` on approval tasks so the agent fills it before handing over, and errors `not-archived` on a `done` task outside `done/`.
+- `task done` write order: archived file → remove old → `CHANGELOG.md` → `_index.md`; everything is computed and checked before the first write. The entry (`## <date> — <title>`, summary bullet, `Task \`<id>\`; source: …`) goes above the first level-2 heading outside code/HTML blocks, so it lands under the init template comment; the rest of the file stays byte-for-byte.
+- `check::task_diagnostics` decides "archived" from the file's location, so the safety net checks `task done`'s moved file as an archived task.
 - `check` codes: `frontmatter`/`title`/`log` (parse), `id-filename`, `stage`, `blocked-reason`, `done-status`, `section-missing`, `depends`, `scope-empty`, `plan-empty`, `acceptance-empty`, `scope-glob`, `scope-path` (warning), `log-missing`, `log-created`, `log-title`, `log-transition`, `log-attempts`, `log-scope`, `log-mismatch`, `active-tasks`, `index-stale`, `ctx-all-done`, `ctx-forbidden`, `root-file-missing`, `ctx-task-inactive` (warnings).
 - Completeness (`scope-empty`, `plan-empty`, `acceptance-empty`) is a warning in draft and blocked, an error otherwise (user decision 2026-10-04). A missing `_index.md` is fine while there are no tasks (`init` doesn't write one).
 - Log diagnostics have no line numbers: `LogEntry` doesn't keep its source line. Follow-up if agents need them.
@@ -62,4 +65,4 @@ struct Metrics { lines, words, sections, max_depth, plan_steps, scope_len, code_
 - `factory.md` has no open design questions (2026-10-03); quality thresholds start as placeholders and get tuned in Phase 8 dogfooding.
 
 ## Next
-User review of Phase 5 (in a scratch git repo: walk a task to `implement`, change a file outside scope, `check`). Then Phase 6 — `task done`: approval → done, move to `done/`, CHANGELOG entry, index.
+User review of Phase 6 (walk a task from `task new` to `task done` in a scratch dir; read the CHANGELOG entry). Then Phase 7 — quality gate (`Metrics`, `[quality.*]` thresholds in `check`) and `specdev fmt`.

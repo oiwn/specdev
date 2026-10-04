@@ -120,6 +120,11 @@ enum TaskCommands {
         /// New value; "" clears. depends takes comma-separated task ids
         value: String,
     },
+    /// Finish an approved task: log it, move it to done/, add a CHANGELOG entry
+    Done {
+        /// Task id, sequence number, or slug
+        id: String,
+    },
     /// Add or remove a scope entry; every change is logged
     Scope {
         /// Task id, sequence number, or slug
@@ -177,6 +182,7 @@ fn main() {
                 TaskCommands::List => task::cmd::list(root, format),
                 TaskCommands::Show { id } => task::cmd::show(root, &id, format),
                 TaskCommands::Index => task::cmd::index(root, format),
+                TaskCommands::Done { id } => task::done::done(root, &id, format),
                 TaskCommands::Advance { id, to } => {
                     task::state::advance(root, &id, to.as_deref(), format)
                 }
@@ -272,6 +278,10 @@ mod tests {
         assert!(
             cli(&["task", "block", "3"]).is_err(),
             "--reason is required"
+        );
+        assert_eq!(
+            task(&["task", "done", "3"]),
+            TaskCommands::Done { id: "3".into() }
         );
     }
 

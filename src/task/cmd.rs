@@ -158,7 +158,7 @@ fn next_step(position: Position) -> &'static str {
         }
         (Status::InProgress, None) => "Invalid state: in-progress without a stage.",
         (Status::Approval, _) => {
-            "Human: run the manual e2e steps, open the PR, and merge; then mark the task done."
+            "Human: tick ## Manual checks, open the PR, and merge; with a one-line ## Summary in place, then `specdev task done <id>`."
         }
         (Status::Done, _) => "Done.",
         (Status::Blocked, _) => {

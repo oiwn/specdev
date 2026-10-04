@@ -66,6 +66,11 @@ impl TaskStore {
         tasks
     }
 
+    /// `specs/tasks/done/`, where finished tasks are archived.
+    pub fn done_dir(&self) -> PathBuf {
+        self.dir.join(DONE_DIR)
+    }
+
     pub fn write_task(&self, task: &Task) -> Result<(), Error> {
         fs::write(&task.path, task.render())?;
         Ok(())

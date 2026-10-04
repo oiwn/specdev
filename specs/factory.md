@@ -60,11 +60,11 @@ Loop: verify fail or review changes → fix → verify again.
    - Addresses `## Review` notes or verify failures. `attempts` +1.
    - Next: → `verify`. If `attempts` > `max_attempts` → `blocked`.
 7. **approval** — human. The agent stops here.
-   - Runs the manual e2e steps; problems go in as `^^^` → `fix`.
+   - Runs the manual e2e steps and ticks `## Manual checks`; problems go in as `^^^` → `fix`.
    - Opens the PR, CI runs, human merges.
    - Next: merge → `done`.
 8. **done** — human, or the agent when asked, after merge.
-   - `specdev task done <id>`: moves the file to `specs/tasks/done/`, adds a changelog entry, regenerates `_index.md`. Next queued task can start.
+   - `specdev task done <id>`: logs `approval → done`, moves the file to `specs/tasks/done/`, adds a CHANGELOG entry built from the task's one-line `## Summary`, regenerates `_index.md`. Refuses while `## Manual checks` has unticked boxes or `## Summary` is missing. Next queued task can start.
 9. **blocked** — set by anyone, or automatically at the attempts cap.
    - `blocked_reason` is required. Human decides: back to a stage, or back to `draft`.
 
@@ -122,7 +122,8 @@ blocked_reason: "..."        # required iff status = blocked
 
 ## Plan          (required, checkboxes)
 ## Acceptance    (required, checkboxes: commands the agent runs at verify)
-## Manual checks (optional, checkboxes: human e2e steps at approval)
+## Summary       (optional; one line, required by `task done` for the CHANGELOG entry)
+## Manual checks (optional, checkboxes: human e2e steps at approval; `task done` gate)
 ## Context       (optional)
 ## Findings      (optional)
 ## Review        (optional, written by review, consumed by fix)

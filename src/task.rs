@@ -3,6 +3,7 @@
 //! frontmatter and the log; everything between them is the agent's.
 
 pub mod cmd;
+pub mod done;
 mod frontmatter;
 mod id;
 mod log;

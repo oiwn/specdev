@@ -1006,3 +1006,134 @@ fn task_new_prefills_acceptance_defaults() {
         "got {content}"
     );
 }
+
+/// A new task `slug` with scope, ticked Plan and Acceptance, and a Summary:
+/// everything `advance` and `done` need, walked to `ready`.
+fn ready_to_go(dir: &Path, slug: &str) -> std::path::PathBuf {
+    step(dir, &["task", "new", slug]);
+    let file = fs::read_dir(dir.join("specs/tasks"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.to_string_lossy().ends_with(&format!("-{slug}.md")))
+        .unwrap();
+    step(
+        dir,
+        &["task", "scope", slug, "add", "src/a.rs", "--reason", "r"],
+    );
+    edit(&file, "## Plan\n\n", "## Plan\n\n- [x] build it\n\n");
+    edit(
+        &file,
+        "## Acceptance\n\n",
+        "## Acceptance\n\n- [x] cargo test\n\n",
+    );
+    step(dir, &["task", "advance", slug]);
+    file
+}
+
+/// ready → in-progress → … → approval.
+fn to_approval(dir: &Path, slug: &str) {
+    for _ in 0..4 {
+        step(dir, &["task", "advance", slug]);
+    }
+}
+
+#[test]
+fn task_done_archives_and_writes_changelog() {
+    let tmp = init_tmp();
+    let dir = tmp.path();
+    fs::create_dir(dir.join("src")).unwrap();
+    let changelog = dir.join("CHANGELOG.md");
+    let original = fs::read_to_string(&changelog).unwrap();
+
+    let x = ready_to_go(dir, "x");
+    let y = ready_to_go(dir, "y");
+    refused(
+        dir,
+        &x,
+        &["task", "done", "x"],
+        "only tasks in approval can be done",
+    );
+    to_approval(dir, "x");
+    let (out, _, _) = run(dir, &["check"]);
+    assert!(out.contains("warning[summary-missing]"), "got {out}");
+
+    // Gates: a Summary is required; Manual checks must be ticked.
+    refused(
+        dir,
+        &x,
+        &["task", "done", "x"],
+        "needs a one-line `## Summary`",
+    );
+    edit(
+        &x,
+        "## Log",
+        "## Manual checks\n\n- [ ] try it by hand\n\n## Summary\n\nShips x.\n\n## Log",
+    );
+    refused(
+        dir,
+        &x,
+        &["task", "done", "x"],
+        "1 of 1 `## Manual checks` items unticked",
+    );
+    edit(&x, "- [ ] try it", "- [x] try it");
+    // y can't start while x is active.
+    refused(
+        dir,
+        &y,
+        &["task", "advance", "y"],
+        "`0001-x` is already active",
+    );
+
+    fs::write(
+        dir.join("specs/ctx.md"),
+        "# Current Task Context: x\n\nTask: specs/tasks/0001-x.md\n",
+    )
+    .unwrap();
+    let out = step(dir, &["task", "done", "x"]);
+    assert!(out.contains("0001-x — approval → done"), "got {out}");
+    assert!(
+        out.contains("Note: Moved to specs/tasks/done/0001-x.md"),
+        "got {out}"
+    );
+
+    let archived = dir.join("specs/tasks/done/0001-x.md");
+    assert!(!x.exists(), "old file must be gone");
+    let content = fs::read_to_string(&archived).unwrap();
+    assert!(content.contains("status: done\n"), "got {content}");
+    assert!(
+        content.ends_with(" advance approval → done\n"),
+        "got {content}"
+    );
+
+    let log = fs::read_to_string(&changelog).unwrap();
+    assert!(
+        log.starts_with(&original),
+        "existing content must stay intact"
+    );
+    assert!(
+        log.contains(" — x\n\n- Ships x.\n- Task `0001-x`\n"),
+        "got {log}"
+    );
+    let index = fs::read_to_string(dir.join("specs/tasks/_index.md")).unwrap();
+    assert!(
+        index.contains("## Done\n\n- **0001-x** — done — x"),
+        "got {index}"
+    );
+    let (out, _, _) = run(dir, &["check"]);
+    assert!(out.contains("warning[ctx-task-inactive]"), "got {out}");
+
+    let (_, err, code) = run(dir, &["task", "done", "x"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("archived in done/"), "got {err}");
+
+    // The queue moves on; the newer entry goes above the older one.
+    to_approval(dir, "y");
+    edit(&y, "## Log", "## Summary\n\n- Ships y.\n\n## Log");
+    step(dir, &["task", "done", "y"]);
+    let log = fs::read_to_string(&changelog).unwrap();
+    let (at_y, at_x) = (
+        log.find("- Ships y.").unwrap(),
+        log.find("- Ships x.").unwrap(),
+    );
+    assert!(at_y < at_x, "newest entry first: {log}");
+}

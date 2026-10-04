@@ -13,8 +13,8 @@ use crate::diag::{Diagnostic, Severity};
 use crate::md;
 use crate::output::{self, Format, Report};
 use crate::status;
-use crate::task::transition;
 use crate::task::{INDEX_FILE, Status, TASKS_DIR, Task, TaskId, TaskStore};
+use crate::task::{done, transition};
 use crate::vcs;
 
 pub fn run(root: &Path, staged: bool, format: Format) -> Result<(), Error> {
@@ -116,15 +116,17 @@ fn check_store(
     Ok(diags)
 }
 
-/// The per-task rules for an open task; state commands run it before and
-/// after a change and refuse changes that add errors.
+/// The per-task rules; state commands run it before and after a change and
+/// refuse changes that add errors. Whether the task is archived follows from
+/// where its file lives, so `task done` checks the moved file.
 pub fn task_diagnostics(
     task: &Task,
     store: &TaskStore,
     config: &Config,
     root: &Path,
 ) -> Vec<Diagnostic> {
-    check_task(task, store, config, root, false)
+    let archived = task.path.parent() == Some(store.done_dir().as_path());
+    check_task(task, store, config, root, archived)
 }
 
 fn check_task(
@@ -167,6 +169,12 @@ fn check_task(
             format!("in done/ but status is `{}`", front.status),
         );
     }
+    if !archived && front.status == Status::Done {
+        error(
+            "not-archived",
+            "status is `done` but the file isn't in done/; finish tasks with `specdev task done`".to_string(),
+        );
+    }
 
     let outline = md::outline(&task.body);
     for section in &config.task.required_sections {
@@ -188,6 +196,14 @@ fn check_task(
     if !archived && front.status != Status::Done {
         diags.extend(completeness(task, &outline));
         diags.extend(scope_lint(task, root));
+    }
+    if front.status == Status::Approval && done::summary(task).is_none() {
+        diags.push(Diagnostic::warning(
+            &task.path,
+            None,
+            "summary-missing",
+            "add a one-line `## Summary`; `specdev task done` turns it into the CHANGELOG entry",
+        ));
     }
     diags.extend(log_consistency(task));
     diags
@@ -735,6 +751,28 @@ created: 2026-10-03
         );
         assert_eq!(warned.len(), 3, "Cargo.lock flagged without the allowlist");
         assert!(warned.iter().all(|d| d.severity == Severity::Warning));
+    }
+
+    #[test]
+    fn done_tasks_belong_in_done_and_approval_needs_a_summary() {
+        let to = |status: &str, extra_log: &str| {
+            format!(
+                "{VALID_READY}- 2026-10-03 advance ready → in-progress/implement\n- 2026-10-03 advance in-progress/implement → in-progress/verify\n- 2026-10-03 advance in-progress/verify → in-progress/review\n- 2026-10-03 advance in-progress/review → approval\n{extra_log}"
+            )
+            .replace("status: ready", status)
+        };
+        let approval = to("status: approval", "");
+        let tmp = project(&[("0001-a.md", &approval)]);
+        assert_eq!(codes(&tmp), [("summary-missing", W)]);
+
+        let summarized =
+            approval.replace("## Log", "## Summary\n\nShipped a.\n\n## Log");
+        let tmp = project(&[("0001-a.md", &summarized)]);
+        assert_eq!(codes(&tmp), []);
+
+        let done = to("status: done", "- 2026-10-03 advance approval → done\n");
+        let tmp = project(&[("0001-a.md", &done)]);
+        assert_eq!(codes(&tmp), [("not-archived", E)]);
     }
 
     #[test]

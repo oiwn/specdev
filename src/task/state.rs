@@ -32,6 +32,74 @@ impl Change {
     }
 }
 
+/// An open task loaded for a state change, with its diagnostics before the
+/// change (the baseline for the safety net).
+pub(super) struct Loaded {
+    pub config: Config,
+    pub store: TaskStore,
+    pub task: Task,
+    pub before: Vec<Diagnostic>,
+}
+
+/// Load the task matching `query` and refuse if its frontmatter already
+/// disagrees with its log: state can't be built on a broken history.
+pub(super) fn load(root: &Path, query: &str) -> Result<Loaded, Error> {
+    let config = Config::load(root)?;
+    let store = TaskStore::open(root)?;
+    let task = find_open(&store, query)?.clone();
+    let before = check::task_diagnostics(&task, &store, &config, root);
+    let broken: Vec<&Diagnostic> = before
+        .iter()
+        .filter(|d| d.severity == Severity::Error && d.code.starts_with("log-"))
+        .collect();
+    if !broken.is_empty() {
+        return Err(Error::Usage(format!(
+            "`{}` disagrees with its own log; repair the file before changing its state:\n{}",
+            task.front.id,
+            lines(&broken)
+        )));
+    }
+    Ok(Loaded {
+        config,
+        store,
+        task,
+        before,
+    })
+}
+
+/// Append `events` dated today; returns the rendered log lines.
+pub(super) fn append(task: &mut Task, events: Vec<LogEvent>) -> Vec<String> {
+    let date = Local::now().date_naive();
+    let entries: Vec<LogEntry> = events
+        .into_iter()
+        .map(|event| LogEntry { date, event })
+        .collect();
+    let lines = entries.iter().map(ToString::to_string).collect();
+    task.log.extend(entries);
+    lines
+}
+
+/// Refuse when the changed `task` has check errors the original didn't.
+pub(super) fn refuse_new_errors(
+    loaded: &Loaded,
+    task: &Task,
+    root: &Path,
+) -> Result<(), Error> {
+    let after = check::task_diagnostics(task, &loaded.store, &loaded.config, root);
+    let added: Vec<&Diagnostic> = after
+        .iter()
+        .filter(|d| d.severity == Severity::Error && !loaded.before.contains(d))
+        .collect();
+    if added.is_empty() {
+        return Ok(());
+    }
+    Err(Error::Usage(format!(
+        "refused: this change would make `specdev check` fail for `{}`:\n{}",
+        task.front.id,
+        lines(&added)
+    )))
+}
+
 /// Load the task, run `change` on a copy, refuse if the result adds check
 /// errors, then write the task and the index and report.
 fn apply(
@@ -40,70 +108,30 @@ fn apply(
     format: Format,
     change: impl FnOnce(&mut Task, &TaskStore, &Config) -> Result<Change, Error>,
 ) -> Result<(), Error> {
-    let config = Config::load(root)?;
-    let mut store = TaskStore::open(root)?;
-    let original = find_open(&store, query)?.clone();
-    let id = original.front.id.clone();
+    let mut loaded = load(root, query)?;
+    let mut task = loaded.task.clone();
+    let change = change(&mut task, &loaded.store, &loaded.config)?;
+    let log = append(&mut task, change.events);
+    refuse_new_errors(&loaded, &task, root)?;
 
-    let before = check::task_diagnostics(&original, &store, &config, root);
-    let broken: Vec<&Diagnostic> = before
-        .iter()
-        .filter(|d| d.severity == Severity::Error && d.code.starts_with("log-"))
-        .collect();
-    if !broken.is_empty() {
-        return Err(Error::Usage(format!(
-            "`{id}` disagrees with its own log; repair the file before changing its state:\n{}",
-            lines(&broken)
-        )));
-    }
-
-    let mut task = original.clone();
-    let change = change(&mut task, &store, &config)?;
-    let today = Local::now().date_naive();
-    let appended: Vec<String> = change
-        .events
-        .iter()
-        .map(|event| {
-            LogEntry {
-                date: today,
-                event: event.clone(),
-            }
-            .to_string()
-        })
-        .collect();
-    task.log.extend(
-        change
-            .events
-            .into_iter()
-            .map(|event| LogEntry { date: today, event }),
-    );
-
-    let after = check::task_diagnostics(&task, &store, &config, root);
-    let added: Vec<&Diagnostic> = after
-        .iter()
-        .filter(|d| d.severity == Severity::Error && !before.contains(d))
-        .collect();
-    if !added.is_empty() {
-        return Err(Error::Usage(format!(
-            "refused: this change would make `specdev check` fail for `{id}`:\n{}",
-            lines(&added)
-        )));
-    }
-
-    store.write_task(&task)?;
+    loaded.store.write_task(&task)?;
     let report = StateReport {
-        id,
-        from: original.position().to_string(),
+        id: task.front.id.clone(),
+        from: loaded.task.position().to_string(),
         to: task.position().to_string(),
-        log: appended,
+        log,
         note: change.note,
         index: String::new(),
     };
-    if let Some(slot) = store.tasks.iter_mut().find(|t| t.front.id == task.front.id)
+    if let Some(slot) = loaded
+        .store
+        .tasks
+        .iter_mut()
+        .find(|t| t.front.id == task.front.id)
     {
         *slot = task;
     }
-    let index = store.write_index()?;
+    let index = loaded.store.write_index()?;
     output::emit(
         &StateReport {
             index: index.display().to_string(),
@@ -135,7 +163,7 @@ fn lines(diags: &[&Diagnostic]) -> String {
         .join("\n")
 }
 
-fn usage(msg: impl Into<String>) -> Error {
+pub(super) fn usage(msg: impl Into<String>) -> Error {
     Error::Usage(msg.into())
 }
 
@@ -177,7 +205,7 @@ fn parse_target(s: &str) -> Result<Position, Error> {
             "use `specdev task block <id> --reason \"...\"` to block a task",
         )),
         (Status::Done, _) => Err(usage(
-            "finishing a task is `specdev task done <id>` (not implemented yet)",
+            "finish a task with `specdev task done <id>` (after the merge)",
         )),
         (Status::InProgress, None) => Err(usage(
             "`in-progress` needs a stage: implement, verify, review, or fix",
@@ -437,13 +465,13 @@ pub fn scope_rm(
 }
 
 #[derive(Serialize)]
-struct StateReport {
-    id: TaskId,
-    from: String,
-    to: String,
-    log: Vec<String>,
-    note: Option<String>,
-    index: String,
+pub(super) struct StateReport {
+    pub id: TaskId,
+    pub from: String,
+    pub to: String,
+    pub log: Vec<String>,
+    pub note: Option<String>,
+    pub index: String,
 }
 
 impl Report for StateReport {
