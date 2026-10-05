@@ -20,9 +20,7 @@ const CTX_TEMPLATE: &str = "# Current Task Context\n";
 const ROADMAP_TEMPLATE: &str = "\
 # Roadmap
 
-Committed future direction, in rough priority order. Promote items here from
-`ideas.md` when decided; move items into `ctx.md` when they become the active
-task.
+Committed future direction, in rough priority order. Promote items here from `ideas.md` when decided; move items into `ctx.md` when they become the active task.
 
 ## Next
 
@@ -32,24 +30,19 @@ task.
 const IDEAS_TEMPLATE: &str = "\
 # Ideas
 
-Uncommitted possibilities — noted but not decided to do right now. Promote to
-`roadmap.md` only when we decide to pursue something.
+Uncommitted possibilities — noted but not decided to do right now. Promote to `roadmap.md` only when we decide to pursue something.
 ";
 
 const CLEANUP_TEMPLATE: &str = "\
 # Cleanup
 
-Code smells, duplication, and refactor notes. Read on demand only — not session
-context. Each entry is a `##` heading with the file or component, followed by
-1-3 sentences.
+Code smells, duplication, and refactor notes. Read on demand only — not session context. Each entry is a `##` heading with the file or component, followed by 1-3 sentences.
 ";
 
 const CHANGELOG_TEMPLATE: &str = "\
 # Changelog
 
-Completed tasks, moved here from `specs/ctx.md` once every checkbox in their
-plan is done. Newest entry at the top, dated. Freeform — one block per finished
-task. Coexists with any conventional release notes already here.
+Completed tasks, newest entry at the top, dated. `specdev task done` adds an entry for each finished task file; work done directly in `specs/ctx.md` is moved here once every checkbox in its plan is done. Coexists with any conventional release notes already here.
 
 <!-- Entry template:
 ## YYYY-MM-DD — <task title>

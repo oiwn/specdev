@@ -1,10 +1,11 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
 mod check;
 mod config;
 mod diag;
+mod fmt;
 mod init;
 mod list;
 mod md;
@@ -57,6 +58,11 @@ enum Commands {
     Scan,
     /// Show spec directory health and status
     Status,
+    /// Normalize spec Markdown: unwrap paragraphs, `-` bullets, blank lines around headings
+    Fmt {
+        /// Files to format (default: specs/*.md and open task files)
+        files: Vec<PathBuf>,
+    },
     /// Validate task files, their logs, the task index, scope, and spec rules
     Check {
         /// Check only staged files against the scope, as warnings (pre-commit)
@@ -170,6 +176,7 @@ fn main() {
         Commands::Scan => scan::run(Path::new(""), format),
         Commands::Status => status::run(Path::new(""), format),
         Commands::Check { staged } => check::run(Path::new(""), staged, format),
+        Commands::Fmt { files } => fmt::run(Path::new(""), &files, format),
         Commands::List { stats } => list::run(stats, format),
         Commands::Skill { command } => output::require_text("skill", format)
             .and_then(|()| match command {
@@ -242,6 +249,17 @@ mod tests {
         assert_eq!(
             cli(&["check", "--staged"]).unwrap(),
             Commands::Check { staged: true }
+        );
+    }
+
+    #[test]
+    fn parses_fmt() {
+        assert_eq!(cli(&["fmt"]).unwrap(), Commands::Fmt { files: vec![] });
+        assert_eq!(
+            cli(&["fmt", "specs/a.md", "specs/b.md"]).unwrap(),
+            Commands::Fmt {
+                files: vec!["specs/a.md".into(), "specs/b.md".into()]
+            }
         );
     }
 

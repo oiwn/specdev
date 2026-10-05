@@ -11,7 +11,7 @@ task. Always read `specs/overview.md` and `specs/ctx.md` before coding.
 ## Project
 
 - specdev is a Rust CLI plus a bundled agent skill for managing human-readable, human-editable spec and context files and keeping them sorted.
-- Architecture and gotchas: `specs/overview.md`. Current task and build plan: `specs/ctx.md`. Multi-stage task pipeline design ("Dark Factory"): `specs/factory.md`.
+- Architecture, pipeline rules, dependencies, and gotchas: `specs/overview.md`. Current task: `specs/ctx.md`. What's next: `specs/roadmap.md`. Multi-stage task pipeline design ("Dark Factory"): `specs/factory.md`.
 - This repo dogfoods its own `specs/`; follow the specdev skill when editing them.
 
 ## Design principles
@@ -29,7 +29,7 @@ task. Always read `specs/overview.md` and `specs/ctx.md` before coding.
 - **No `mod.rs`.** Use the modern module layout: `src/task.rs` declares `mod frontmatter;` and the child lives in `src/task/frontmatter.rs`.
 - Errors: the crate-level `Error` enum (`thiserror`) in `src/main.rs`; add variants there rather than per-module error types unless a module clearly needs its own.
 - Unit tests inline in each module (`#[cfg(test)] mod tests`); end-to-end binary tests in `tests/cli.rs` using `tempfile`.
-- Keep dependencies minimal; justify each new crate in the task's Findings. The approved list and the reasons live in `specs/ctx.md` (Context → Dependencies).
+- Keep dependencies minimal; justify each new crate in the task's Findings. The approved list and the reasons live in `specs/overview.md` (Dependencies).
 - Reuse shared parsers instead of re-scanning Markdown per command (see the `md` module in the build plan).
 
 ## Writing specs and docs

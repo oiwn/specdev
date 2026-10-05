@@ -1220,3 +1220,76 @@ fn quality_gate_for_spec_files() {
         assert!(out.contains(col), "stats header missing {col}: {out}");
     }
 }
+
+#[test]
+fn fmt_normalizes_specs_and_check_flags_unformatted() {
+    let tmp = init_tmp();
+    let dir = tmp.path();
+    let (out, _, _) = run(dir, &["check"]);
+    assert_eq!(out, "OK\n", "init's templates are already formatted");
+
+    let ideas = dir.join("specs/ideas.md");
+    let roadmap = dir.join("specs/roadmap.md");
+    fs::write(&ideas, "# Ideas\n* one idea that\n  wraps\n^^^ keep me\n").unwrap();
+    fs::write(&roadmap, "# Roadmap\nA paragraph that\nwraps.\n").unwrap();
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "unformatted is a warning: {out}");
+    assert!(
+        out.contains("specs/ideas.md: warning[unformatted]"),
+        "got {out}"
+    );
+    assert!(
+        out.contains("specs/roadmap.md: warning[unformatted]"),
+        "got {out}"
+    );
+
+    // One file at a time.
+    let (out, err, code) = run(dir, &["fmt", "specs/ideas.md"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        "Formatted specs/ideas.md\n1 formatted, 0 already formatted\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&ideas).unwrap(),
+        "# Ideas\n\n- one idea that wraps\n^^^ keep me\n"
+    );
+    assert!(
+        fs::read_to_string(&roadmap)
+            .unwrap()
+            .contains("that\nwraps")
+    );
+
+    // Everything; then nothing left to do.
+    let (out, _, _) = run(dir, &["fmt"]);
+    assert!(out.contains("Formatted specs/roadmap.md"), "got {out}");
+    let (out, _, _) = run(dir, &["fmt"]);
+    assert!(out.starts_with("All "), "got {out}");
+    let (out, _, _) = run(dir, &["check"]);
+    assert_eq!(out, "OK\n");
+
+    // Task files are covered and stay valid.
+    step(dir, &["task", "new", "x"]);
+    let task = dir.join("specs/tasks/0001-x.md");
+    edit(
+        &task,
+        "## Plan\n\n",
+        "## Plan\n\n* [ ] a step\n  wrapped\n\n",
+    );
+    let (out, _, _) = run(dir, &["check"]);
+    assert!(out.contains("0001-x.md: warning[unformatted]"), "got {out}");
+    let (_, err, code) = run(dir, &["fmt"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        fs::read_to_string(&task)
+            .unwrap()
+            .contains("- [ ] a step wrapped\n")
+    );
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(!out.contains("unformatted"), "got {out}");
+
+    let (_, err, code) = run(dir, &["fmt", "specs/missing.md"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("specs/missing.md"), "got {err}");
+}
