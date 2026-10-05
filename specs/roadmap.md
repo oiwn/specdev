@@ -4,7 +4,6 @@ Committed future direction, in rough priority order. The task pipeline ("Dark Fa
 
 ## Next — 0.3.0 release
 
-- **Skill rewrite** (`skills/SKILL.md`): the task workflow per stage, which commands own which state (frontmatter and `## Log` belong to commands; Plan, Findings, Review, Summary, and ticks are the agent's), the gates, the scope contract (`task scope add --reason` before touching a file), `check` at every transition and how to read its codes and refusals, `fmt`, `--format`. Keep the ctx/marker/routing parts; no tables.
 - **README**: CLI sections for `check`, `task …`, `fmt`, `--format`; a short task-pipeline section; `specdev.toml` keys; soft wraps.
 - **Examples**: a full task lifecycle in `references/examples.md` (file at draft, approved, done; the CHANGELOG entry).
 - **Dogfood here**: `--format json|toon` for `init` and `skill`, run as two real tasks through the pipeline (then remove `output::require_text`); collect friction, including from use in other projects.
