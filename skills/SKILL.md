@@ -3,99 +3,66 @@ name: specdev
 description: >
   Use when working in a project that uses specification-driven development.
   Start from specs/overview.md and specs/ctx.md, treat specs as the active
-  task context, keep ctx.md concise and decision-relevant (a checkbox plan for
-  the current task), route content to its right home
-  (changelog/roadmap/ideas/overview), address user remarks marked with ^^^,
-  answer with &&&, and keep specs current while planning or implementing. Trigger when the user asks to work
-  on specs, continue from specs, address remarks, compress specs, or when
-  entering a project with a specs/ directory.
+  task context, keep ctx.md concise and decision-relevant, route content to
+  its right home (changelog/roadmap/ideas/overview), address user remarks
+  marked with ^^^ and answer with &&&. Drive task files in specs/tasks/
+  through the specdev CLI (task new/advance/scope/done, check) instead of
+  editing their state by hand. Trigger when the user asks to work on specs,
+  continue from specs, pick up or create a task, address remarks, compress
+  specs, or when entering a project with a specs/ directory.
 ---
 
-Teaches the agent to work with project specs as the primary planning,
-coordination, and memory surface. Specs are Markdown files in a `specs/`
-directory. The agent reads them, updates them, and uses them as context
-before writing code.
+Teaches the agent to work with project specs as the primary planning, coordination, and memory surface. Specs are Markdown files in a `specs/` directory. The agent reads them, updates them, and uses them as context before writing code. The `specdev` CLI owns the structured parts (task state, logs, indexes) and checks everything; the agent owns the prose.
 
 ## Invariants
 
-Hold these at all times. They exist because agents silently drift on exactly
-these points.
+Hold these at all times. They exist because agents silently drift on exactly these points.
 
-- **Task identity is immutable by default.** The `ctx.md` title is the active
-  task. Don't rename, narrow, replace, or archive it without explicit user
-  intent.
-- **Never bulk-replace an active `ctx.md`.** Make the smallest surgical edit
-  that achieves the change. Wholesale overwrite or delete requires explicit
-  reset/archive/compress intent.
-- **Archival requires explicit intent.** All steps done is necessary, not
-  sufficient — the titled task must be finished AND the user must explicitly
-  ask to archive/close/reset. When uncertain, leave `ctx.md` active and ask.
-- **Preserve decision-relevant state.** "Concise" means concise and
-  decision-relevant, not minimal. Keep findings, decisions, open questions, and
-  constraints that remain relevant to the next unchecked step.
+- **Task identity is immutable by default.** The `ctx.md` title and a task file's `# Task:` title name the work. Don't rename, narrow, replace, or archive without explicit user intent.
+- **Never bulk-replace an active `ctx.md` or task file.** Make the smallest surgical edit that achieves the change.
+- **Archival requires explicit intent.** All steps done is necessary, not sufficient.
+- **Preserve decision-relevant state.** "Concise" means concise and decision-relevant, not minimal.
+- **Structured state goes through commands.** Never hand-edit task frontmatter, the `## Log` section, or `specs/tasks/_index.md`. `specdev check` detects hand edits from the task's own log and fails.
 
 ## Session startup
 
 When entering a project, or when the user says "continue from specs":
 
 1. Read `specs/overview.md` (durable project backdrop + gotchas).
-2. Read `specs/ctx.md` (the current task — concise, with a checkbox plan).
-3. If `ctx.md` has no active task (just the `# Current Task Context` header),
-   ask the user what to work on, or take the next item from `specs/roadmap.md`
-   (see "The working loop"). The header-only state is valid, not an error.
-4. Read `specs/ideas.md` when the user asks for brainstorming or roadmap work,
-   or when `ctx.md` points there.
-5. Do not read `specs/cleanup.md` unless the user asks — it is not session
-   context.
+2. Read `specs/ctx.md` (the current focus). If it points at a task file, read that file and run `specdev task show <id>` for its state and next step.
+3. Run `specdev check` to see what is broken or drifting before you change anything.
+4. If there is no active work (`ctx.md` is just the `# Current Task Context` header and no task is in progress), ask the user what to do, or take the next item from `specs/roadmap.md` or the task queue (`specdev task list`). The header-only state is valid, not an error.
+5. Read `specs/ideas.md` only for brainstorming or roadmap work, or when `ctx.md` points there. Don't read `specs/cleanup.md` unless the user asks.
 6. Identify any `^^^` remarks in relevant specs (see below).
 
 ## Content routing — put each thing in its right home
 
-Content is routed by *when* it lives. This is what keeps `ctx.md` clean and is
-the main fix for agents that leave stale scope, deferred items, and gotchas
-piling up in the current task.
+Content is routed by *when* it lives. This keeps `ctx.md` and task files clean.
 
-- **`specs/ctx.md`** — the current task + its checkbox plan.
-- **`CHANGELOG.md`** — a task whose checkboxes are all done (move it here).
+- **`specs/ctx.md`** — the current focus: a pointer to the active task file, or a design/fuzzy task with its own checkbox plan.
+- **`specs/tasks/<id>.md`** — one task, sized to land as one commit: plan, scope, acceptance, review, log.
+- **`CHANGELOG.md`** (root) — finished work. `specdev task done` writes entries for task files; ctx tasks are moved here by hand under the archival gate.
 - **`specs/roadmap.md`** — committed future direction.
 - **`specs/ideas.md`** — noted but not-now ideas.
-- **`specs/overview.md`** — architecture, data flow, durable knowledge; plus
-  gotchas, quirks, DB/engine knowledge (Gotchas section).
-- **`specs/cleanup.md`** — code smells, refactors spotted.
+- **`specs/overview.md`** — architecture, data flow, durable knowledge, gotchas and quirks.
+- **`specs/cleanup.md`** — code smells and refactors spotted.
 
-Note: `CHANGELOG.md` and `AGENTS.md` live at the project **root**, not under
-`specs/`. `CHANGELOG.md` coexists with any conventional changelog already there.
+`CHANGELOG.md` and `AGENTS.md` live at the project root, not under `specs/`. Content routing does not expand the user's edit scope: if the user limits edits to named files, record follow-ups in the active task and leave other files untouched.
 
-Content routing does not expand the user's edit scope. If the user limits edits
-to named files, record any needed follow-up in the active task and leave the
-other files untouched.
-
-**Forbidden inside `ctx.md`:** `Deferred` sections, `Roadmap pointer` lines,
-`Gotchas`/`Quirks` blocks, architecture essays, and "completed work is not
-repeated here" meta-notes. Route them to their home above instead.
+**Forbidden inside `ctx.md`:** `Deferred` sections, `Roadmap pointer` lines, `Gotchas`/`Quirks` blocks, architecture essays, and "completed work is not repeated here" meta-notes. Route them to their home instead.
 
 ## The working loop
 
-Content matures left-to-right, then archives:
+Content matures in one direction, then archives: `ideas.md` (uncommitted) → `roadmap.md` (committed) → `ctx.md` or `specs/tasks/` (active) → `CHANGELOG.md` (done).
 
-```
-ideas.md  ->  roadmap.md  ->  ctx.md  ->  CHANGELOG.md
-uncommitted   committed      active      done
-```
+- An idea moves to `roadmap.md` when decided; a roadmap item becomes active work when picked up.
+- Small, well-defined work (one commit) becomes a **task file** and runs through the task pipeline below. A roadmap item bigger than one commit is split into several task files ordered by `depends`.
+- Design work and big, fuzzy work run directly in **`ctx.md`** with a checkbox plan.
+- When nothing is active, the next item comes from `roadmap.md` or the task queue.
 
-- An `ideas.md` note moves to `roadmap.md` when you decide to do it.
-- A `roadmap.md` item moves to `ctx.md` when you pick it up.
-- A `ctx.md` task becomes eligible for `CHANGELOG.md` only under the archival
-  gate below; checked boxes alone do not authorize the move.
+## ctx.md — the current focus (soft template)
 
-When `ctx.md` has no active task, the next one comes from `roadmap.md`. This is
-the intended loop — keep each file to its stage.
-
-## ctx.md — the current task (soft template)
-
-`ctx.md` is **concise and decision-relevant, not minimal** — enough for the
-agent to execute the current task autonomously, without stale scope, deferred
-items, or gotchas (route those to their home files). Recommended shape:
+`ctx.md` is **concise and decision-relevant, not minimal**. Recommended shape:
 
 ```md
 # Current Task Context: <one line>
@@ -105,230 +72,174 @@ State: <not started | in progress | blocked>
 - [ ] step two
 ## Findings      # optional — concise research/results when the next step is evaluate/discuss
 ## Context
-<what the current unchecked step needs to act on>
+<what the current unchecked step needs; or: "Active task: specs/tasks/0007-slug.md">
 ## Next
 <the immediate next action>
 ```
 
-- The file always starts with `# Current Task Context`; append `: <task>` when
-  a task is active. The header **is the task identity** — don't rename it
-  without explicit user intent. The no-task state is header-only.
-- `## Plan` is the ordered checklist of the task's steps. A step is a **child**,
-  not the task — completing one step is never permission to reset or archive.
-- `## Findings` (optional): compact accumulated research, decisions, results.
-  Use it when the next step is evaluate/discuss/select. Keep it concise and
-  decision-relevant; never delete it without explicit reset intent.
-- `## Context` holds what the *current unchecked step* needs to act on.
-- Tick boxes (`[ ]` -> `[x]`) as you implement. Prefer **surgical edits** —
-  re-read the target section, then patch it; never rewrite or bulk-delete an
-  active `ctx.md` to change one thing.
+- The file always starts with `# Current Task Context`; append `: <task>` when work is active. The header **is the task identity**. The no-task state is header-only.
+- When the work is a task file, keep `ctx.md` to the one-line focus plus a pointer to `specs/tasks/<id>.md`; the plan lives in the task file. specdev never writes `ctx.md`; `check` warns when it points at a task that isn't active.
+- `## Plan` steps are children, not the task: completing one is never permission to reset or archive.
+- `## Findings` (optional): compact research, decisions, results. Never delete without explicit reset intent.
+- Tick boxes (`[ ]` -> `[x]`) as you implement, with surgical edits.
 
-## Task identity + archival
+## Task files and the pipeline
 
-**Task identity is immutable by default.** The `ctx.md` title is the active
-task. Don't rename, narrow, replace, or archive it because a step completed or
-because the user praised one piece of work. "X works; let's decide what's next"
-confirms X, not the parent task.
+A task file is `specs/tasks/<id>.md`: flat-YAML frontmatter (owned by specdev), a Markdown body (yours), and a `## Log` at the end (owned by specdev). The contract (required sections, extra fields, attempts cap, acceptance defaults, quality limits) is in `specdev.toml`.
 
-**Archive only when ALL three hold:**
+```md
+---
+id: 0007-status-freshness
+status: in-progress
+stage: verify
+scope: [src/status.rs, tests/cli.rs]
+created: 2026-10-02
+source: https://github.com/org/repo/issues/12
+---
+# Task: warn when ctx.md is stale while in progress
 
-1. Every checkbox in the active task's plan is `[x]`; **and**
-2. The titled task itself — not merely one child step — is finished; **and**
-3. The user explicitly asks to archive/close/reset, or explicitly states the
-   named task is finished.
+## Plan            checkboxes — the steps
+## Acceptance      checkboxes — commands you run at verify
+## Manual checks   optional checkboxes — human e2e steps at approval
+## Summary         one line — becomes the CHANGELOG entry
+## Context / Findings / Review / Spec updates   optional
+## Log             specdev only
+```
 
-All three are required. "All steps checked" is necessary, not sufficient, and
-`specdev status`'s archive nudge means *confirm with the user* — it is **not**
-permission to auto-archive. When uncertain, leave `ctx.md` active and ask.
+**Who owns what:**
 
-To archive once the gate holds: move the task into `CHANGELOG.md` as a dated
-block at the top (newest first), then reset `ctx.md` to header-only or to the
-next single task. Archival is agent-driven; there is no destructive CLI command
-for it, by design.
+- **Commands own:** `status`, `stage`, `scope`, `attempts`, `blocked_reason`, `source`, `depends`, the `## Log`, the file's location, and `_index.md`.
+- **You own:** the title (set once at creation), Plan, Acceptance, Context, Findings, Review, Summary, Spec updates, and ticking Plan and Acceptance boxes.
+- **The human owns:** approval, `## Manual checks` ticks, branches, the PR, and the merge. specdev never writes to git and never runs project commands.
 
-## Core spec files
+**Stages, in order** (happy path: draft → ready → implement → verify → review → approval → done):
 
-- **`specs/overview.md`** — durable project overview (architecture, data flow,
-  public surfaces) **and the Gotchas/Knowledge home**. Broad; no task detail.
-- **`specs/ctx.md`** — current task (checkbox plan, above). Header-only
-  (`# Current Task Context`) when no task is active.
-- **`specs/roadmap.md`** — committed future direction (what we are doing next).
-  Promote items here from `ideas.md` when decided.
-- **`specs/ideas.md`** — uncommitted backlog of possibilities. Not a plan.
-- **`specs/cleanup.md`** — code-smell notes (`##` heading per entry, 1-3
-  sentences). Read on demand only.
-- **`CHANGELOG.md`** (root) — completed tasks (the archive destination above).
-- **`AGENTS.md`** (root) — agent entry point: a **minimal pointer** to this
-  skill, auto-added by `specdev init` (created if absent, appended idempotently
-  to an existing file). This skill is the full reference.
+1. **draft** — `specdev task new <slug>`; `specdev task set <id> source "<issue or request>"`; add files with `specdev task scope <id> add <path> --reason "..."`; write Plan and Acceptance (`task new` pre-fills project defaults). The human reviews with `^^^`; you answer with `&&&`. When the human approves, compress the dialogue into the plan, then `specdev task advance <id>` → ready. It refuses while `^^^` remarks are open, and it records the approved scope.
+2. **ready** — queued. `specdev task advance <id>` → in-progress/implement; refused while another task is active (one at a time).
+3. **implement** — code only inside `scope`. Need another file? `specdev task scope <id> add <path> --reason "..."` *before* touching it; a large expansion means the plan was wrong — say so. Tick Plan boxes; `specdev task advance <id>` → verify (refused while Plan boxes are unticked).
+4. **verify** — run every Acceptance command yourself and tick each one that passes; specdev only checks the ticks. All pass → `specdev task advance <id>` → review. Any fail → `specdev task advance <id> --to fix`.
+5. **review** — judge the diff against Plan and scope (ideally a fresh session); write `## Review`. Approve → `specdev task advance <id>` → approval. Changes needed → `--to fix`.
+6. **fix** — address `## Review` notes or failures; `specdev task advance <id>` → verify. Each entry into fix bumps `attempts`; past the cap the task is blocked automatically.
+7. **approval** — stop here. Before handing over, write a one-line `## Summary`. The human runs `## Manual checks`, opens the PR, and merges; problems come back as `^^^` and `--to fix`.
+8. **done** — after the merge, `specdev task done <id>` (the human, or you when asked): logs the move, archives to `specs/tasks/done/`, writes the CHANGELOG entry from `## Summary`, updates the index. Refused while Manual checks are unticked or the Summary is missing.
 
-Projects may have additional spec files for features, architecture decisions,
-etc. The files above are the stable workflow; other specs use whatever
-structure fits.
+**Blocked:** `specdev task block <id> --reason "..."` from any open stage. The human decides where it goes next: `specdev task advance <id> --to <draft|ready|implement|verify|review|fix>`.
+
+**Useful anytime:** `specdev task show <id>` (state, progress, log, next step), `specdev task list` (queue order), `specdev task index` (regenerate `_index.md`). Ids accept the full id, the number (`7`), or the slug.
+
+## specdev check
+
+Run `specdev check` after every state change and before handing work back. Projects can also run `specdev check --staged` as a pre-commit hook (scope violations become warnings there). Errors exit 1; warnings don't.
+
+- **Contract:** required sections, `stage` only while in progress, `blocked_reason` only while blocked, `depends` exist, id matches the file name. Empty scope, Plan, or Acceptance is a warning in draft and an error after.
+- **Log consistency** (`log-*`, `log-mismatch`): the frontmatter must equal what the `## Log` replays to. A mismatch means someone edited state by hand. Don't "repair" it by editing the log; tell the user what differs and let them decide.
+- **Scope** (`out-of-scope`): changed files (from git) outside the active task's scope. Add them with `task scope add --reason`, or revert the change. Anything under `specs/` and the project's `[scope] always_allowed` globs never count.
+- **Repo:** one active task (`active-tasks`), `_index.md` up to date (`index-stale` → `specdev task index`).
+- **Quality** (`quality-*`, `md-table`, `ascii-diagram`): files over their size limits, too many plan steps, too large a scope. Act on them: split the task, route content out of `ctx.md`, compress older CHANGELOG entries.
+- **Format** (`unformatted`): run `specdev fmt` rather than re-wrapping by hand.
+
+**Refusals are the safety net.** A state command that would leave the task failing `check` refuses and prints the diagnostics ("refused: this change would make `specdev check` fail"). Fix the cause in the prose or with the right command; never work around a refusal by editing frontmatter or the log.
 
 ## CLI tools
 
-The `specdev` binary scaffolds and inspects specs. It never mutates spec content
-— archival, compression, and edits are agent-driven.
-
-- `specdev init` — scaffold `specs/` (overview, ctx, roadmap, ideas, cleanup) +
-  root `CHANGELOG.md`/`AGENTS.md`. `AGENTS.md` is append-aware (created if
-  absent, else the specdev pointer is appended idempotently).
-- `specdev scan` — list `^^^`/`&&&` remarks across `specs/`, open vs resolved.
-- `specdev status` — health: marker counts, ctx task progress (checked/total),
-  forbidden content in ctx, an archive nudge when all steps are checked, and
-  missing-root-file warnings.
-- `specdev list` — first header + line count per spec. `--stats` adds heading
-  counts by level, checkboxes, open `^^^`, and word count.
-- `specdev skill install [--local]` — install this skill, globally
-  (`~/.agents/skills/specdev/`) or locally (`.agents/skills/specdev/`).
+- `specdev init` — scaffold `specs/` (overview, ctx, roadmap, ideas, cleanup, `tasks/`, `tasks/done/`), `specdev.toml`, and root `CHANGELOG.md`/`AGENTS.md` (append-aware). Safe to re-run.
+- `specdev task new|list|show|index|advance|block|set|scope|done` — the task pipeline above.
+- `specdev check [--staged]` — everything above.
+- `specdev fmt [<file>...]` — normalize Markdown in `specs/` and open task files: soft-wrap paragraphs, `-` bullets, blank lines around headings. Code, tables, links, and `^^^`/`&&&` lines stay as written.
+- `specdev scan` — `^^^`/`&&&` remarks across `specs/`, open vs resolved.
+- `specdev status` — health summary: markers, ctx progress, ctx warnings.
+- `specdev list [--stats]` — spec files with header and size; `--stats` adds headings, checkboxes, remarks, words, code blocks, tables.
+- `specdev skill install [--local]` / `specdev skill check` — install or check this skill.
+- `--format json|toon` (global) — machine-readable output for `check`, `task`, `scan`, `status`, `list`, `fmt`.
 
 ## Formatting specs
 
-Specs are often read in a terminal editor (helix, vim) where rendered Markdown
-is unavailable. Write for plain text:
+Specs are often read in a terminal editor where rendered Markdown is unavailable. Write for plain text:
 
-- **No Markdown tables.** Use one bullet per item, with the key in bold:
-  `- **verify** — CI runs Acceptance; pass → review, fail → fix.`
-- **No ASCII diagrams** (box-drawing, wide state machines, arrows across
-  columns). Describe flows as numbered steps with sub-bullets; a one-line
-  summary like `draft → ready → done` is fine.
-- **Prefer bullets and short text sections** over long paragraphs. One idea
-  per bullet.
-- **Soft wraps.** Write each paragraph or bullet as one line and let the editor wrap it; don't hard-wrap at a fixed width.
-- **Code blocks only for literal content** — file formats, frontmatter
-  examples, commands, config. Not for diagrams.
-- **Shallow headings.** `##` for sections, `###` sparingly; avoid deeper.
+- **No Markdown tables.** One bullet per item, key in bold: `- **verify** — run Acceptance; pass → review, fail → fix.`
+- **No ASCII diagrams.** Describe flows as numbered steps; a one-line `draft → ready → done` is fine.
+- **Bullets and short sections** over long paragraphs. One idea per bullet.
+- **Soft wraps.** One line per paragraph or bullet; `specdev fmt` fixes hard wraps.
+- **Code blocks only for literal content** — file formats, frontmatter, commands, config.
+- **Shallow headings.** `##` for sections, `###` sparingly.
 
 ## Marker protocol
 
-`^^^` and `&&&` are inline markers used **only inside spec files** to
-distinguish user remarks from agent answers during spec editing.
+`^^^` and `&&&` are line-start markers used **only inside spec and task files**:
 
-- `^^^` at line start = user remark, question, correction, or TODO.
-- `&&&` at line start = agent answer, resolution, or clarification addressing a
-  nearby `^^^` remark.
+- `^^^` = user remark, question, correction, or TODO.
+- `&&&` = agent answer addressing a nearby `^^^`.
 
 Rules:
 
-- The agent never writes `^^^`. That marker belongs exclusively to the human.
-  The agent writes `&&&` answers.
-- When addressing a `^^^` remark, add an adjacent `&&&` answer. Do not delete
-  the original `^^^` line.
-- If a remark is unresolved, keep it marked with `^^^` — no `&&&`.
-- Do not use these markers outside spec files (not in code, not in
-  conversation).
+- Never write `^^^`; that marker belongs to the human. Answer with `&&&`.
+- Add the `&&&` answer adjacent to its `^^^`; don't delete the `^^^` line.
+- Leave a remark you can't resolve as `^^^` with no answer.
+- Never use these markers in code, comments, or conversation.
 
 ## Addressing remarks
 
-When the user asks to work on a spec file with remarks:
-
-1. Read the spec file.
-2. Find all `^^^` remarks.
-3. For each remark, either:
-   - Address it with an adjacent `&&&` answer, or
-   - Leave it unresolved with `^^^` if you need user input.
-   When a remark corrects nearby prose, update that prose too; an answer next
-   to a contradictory statement is not a resolution.
-4. Do not proceed to code edits while relevant `^^^` remarks remain
-   unresolved. Address the remarks first or ask for clarification.
-5. Reply with:
-   - what was addressed
-   - what remains open
-   - what the next task is
+1. Read the file and find all `^^^` remarks.
+2. For each, answer it with an adjacent `&&&`, or leave it open if you need the user. When a remark corrects nearby prose, update that prose too.
+3. Don't start code while relevant `^^^` remarks are unresolved (for task files, `advance` enforces this at draft → ready).
+4. Reply with what was addressed, what remains open, and the next step.
 
 ## Context compression
 
-Compress only on **explicit user request** — e.g. "compress / fold / condense /
-clean up the `^^^`/`&&&` dialogue." A general "rewrite this section for clarity"
-is **not** a compress request. Never auto-compress.
+Compress only on **explicit user request** ("compress / fold / condense the `^^^`/`&&&` dialogue"). Approving a draft task counts as that request for that task file. A general "rewrite for clarity" is not.
 
-**Compression boundary:** A request to compress, fold, or resolve notes means
-fold resolved `^^^`/`&&&` pairs into adjacent prose. Preserve the rest of the
-plan, findings, and context at their existing level of detail. Shorten other
-material only when the user explicitly names it.
-
-To compress:
-
-1. Read the spec file.
-2. Identify the resolved `^^^`/`&&&` pairs.
-3. Fold each resolved decision into the surrounding prose, removing the markers
-   and the back-and-forth. **Keep each pair adjacent to the assertion it
-   concerns — never relocate resolved markers into a detached Q&A transcript**
-   (e.g. at the end of the file).
-4. Preserve unresolved `^^^` remarks as-is.
-5. The result reads as clean prose reflecting final decisions, not a transcript.
+- Fold each resolved `^^^`/`&&&` pair into the adjacent prose, removing the markers and the back-and-forth.
+- Keep each decision next to the assertion it concerns; never move pairs into a detached Q&A section.
+- Keep unresolved `^^^` remarks as-is, and the rest of the plan, findings, and context at their existing detail.
 
 See `references/examples.md` for before/after examples.
 
+## Archival
+
+- **Task files:** `specdev task done <id>` after the human merges. That is the only way a task file finishes.
+- **ctx.md tasks:** archive only when all three hold: every Plan box is `[x]`; the titled task itself (not one step) is finished; and the user explicitly asks to archive, close, or reset. `specdev status`'s archive nudge means *ask*, not archive. Then move the task into `CHANGELOG.md` as a dated block at the top, move durable findings to `overview.md` and remaining work to `roadmap.md`, and reset `ctx.md` to the header.
+
 ## Before mutating a spec
 
-Before editing a spec, classify the intended change as exactly one of:
+Classify the change in one line before editing:
 
-- **tick a child step** — `[ ]` -> `[x]`; nothing else.
-- **update findings/context** — add or refine decision-relevant state for the
-  current task.
+- **tick a step** — `[ ]` -> `[x]`; nothing else.
+- **update findings/context/review** — decision-relevant state for the current work.
+- **task state change** — use the `specdev task …` command, never an edit.
 - **add a future idea** — to `ideas.md` or `roadmap.md`.
 - **compress** — fold resolved `^^^`/`&&&` dialogue into prose.
-- **archive** — move a finished task to `CHANGELOG.md` (requires the archive
-  gate above).
+- **archive** — per "Archival".
 
-State that classification in one line before editing. Some operations always
-require **explicit user intent** (never infer them): changing the task title,
-resetting or archiving `ctx.md`, editing `CHANGELOG.md`, deleting findings, or
-compressing. When the change type is ambiguous, ask before editing.
-
-Make the **smallest edit** that achieves the classified change: re-read the
-target section, then surgical-patch it. Never rewrite a whole section to change
-one line.
+Always ask first (never infer): renaming a task, resetting or archiving `ctx.md`, editing `CHANGELOG.md` by hand, deleting findings, compressing. Make the smallest edit: re-read the section, then patch it.
 
 ## Behavior
 
 **Do:**
 
-- Treat specs as the source of task context when the user points to them.
-- Start with `overview.md` and `ctx.md` when entering a project.
-- Keep `ctx.md` concise and decision-relevant — route other content to its home
-  per the table above.
-- Update specs before implementation when the task is ambiguous or strategic.
-- Proceed to implementation when the spec makes the next step clear.
-- Preserve user wording when it carries useful intent.
-- Preserve addressed `^^^`/`&&&` pairs until the user asks to compress.
-- Keep unresolved issues visible.
-- Classify the edit and make the smallest surgical patch; ask before destructive
-  ops (title change, archive/reset, CHANGELOG edit, delete findings, compress).
-- Tick `ctx.md` checkboxes as you implement; archive only at the explicit user
-  request, per the archive gate.
+- Start with `overview.md`, `ctx.md`, and `specdev check`.
+- Keep `ctx.md` concise and route other content home.
+- Put one-commit work in task files and move them only with `specdev task` commands.
+- Declare scope before touching a file; run the Acceptance commands yourself and tick only what passed.
+- Run `specdev check` after every state change.
+- Preserve user wording, `^^^`/`&&&` pairs (until compression), and open questions.
 
 **Do not:**
 
-- Silently rename, narrow, replace, or archive the task title.
-- Bulk-replace or wholesale-delete an active `ctx.md` to change one thing.
-- Archive because a child step finished or because `status` nudged you — confirm
-  with the user that the whole titled task is done.
-- Delete findings/research without explicit reset intent.
-- Silently delete `^^^` remarks, or delete them after adding `&&&` answers (the
-  dialogue stays until compression).
-- Relocate resolved `^^^`/`&&&` pairs into a detached Q&A transcript.
-- Mark a remark as addressed unless it has actually been addressed with `&&&`.
-- Bury open questions in prose.
-- Overwrite user-authored nuance with a generic plan.
-- Start coding while active, relevant `^^^` remarks remain unresolved.
-- Put deferred items, roadmap pointers, gotchas, or architecture essays in
-  `ctx.md`.
-- Use Markdown tables or ASCII diagrams in specs — see "Formatting specs".
+- Hand-edit task frontmatter, `## Log`, or `_index.md`; move or delete task files by hand.
+- Work around a refusal or a `log-mismatch` by editing state.
+- Tick Acceptance boxes you didn't verify, or `## Manual checks` (the human's).
+- Advance past approval yourself, or create branches, commits, or PRs unless the user asks.
+- Rename, narrow, or archive the task without explicit intent; bulk-replace an active `ctx.md`.
+- Delete findings or `^^^` remarks; relocate resolved pairs into a Q&A transcript.
+- Put deferred items, roadmap pointers, gotchas, or architecture essays in `ctx.md`.
+- Use Markdown tables or ASCII diagrams in specs.
 
 ## Gotchas
 
-- `^^^`/`&&&` markers are for spec editing only — never in code, comments, or
-  conversation.
-- `ctx.md` should represent reality. If it is stale, update it before starting
-  work.
-- The no-task state is `ctx.md` with only the `# Current Task Context` header —
-  that is valid, not an error.
-- Do not read `cleanup.md` unless the user explicitly asks — it is not session
-  context.
-- Do not force every spec into the same structure. The core workflow is stable;
-  other specs are flexible.
-- `roadmap.md` is committed direction; `ideas.md` is uncommitted. Don't blur
-  them.
+- `^^^`/`&&&` are for spec and task files only.
+- `ctx.md` should represent reality; if it is stale, update it before starting.
+- The no-task state (`ctx.md` header only, no active task) is valid.
+- Only one task is active (in-progress or approval) at a time; `advance` refuses a second.
+- `check`'s scope test reads uncommitted changes vs `HEAD`; commit each task as one commit to keep it meaningful.
+- `roadmap.md` is committed direction; `ideas.md` is not. Don't blur them.
+- Other spec files can use whatever structure fits; the core workflow is stable.

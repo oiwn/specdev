@@ -29,8 +29,7 @@ Design for driving a repo with agents through a **multi-stage pipeline per task*
 
 ## Workflow
 
-Happy path: draft → ready → implement → verify → review → approval → done.
-Loop: verify fail or review changes → fix → verify again.
+Happy path: draft → ready → implement → verify → review → approval → done. Loop: verify fail or review changes → fix → verify again.
 
 1. **draft** — agent, on a human request.
    - Human points the agent at one issue or roadmap item. No bulk intake.

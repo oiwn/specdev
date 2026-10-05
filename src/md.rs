@@ -33,13 +33,17 @@ pub struct Outline {
     pub lines: usize,
 }
 
-pub fn outline(content: &str) -> Outline {
-    let arena = Arena::new();
+fn options() -> Options<'static> {
     let mut options = Options::default();
     options.extension.tasklist = true;
     options.extension.table = true;
     options.extension.front_matter_delimiter = Some("---".to_string());
-    let root = parse_document(&arena, content, &options);
+    options
+}
+
+pub fn outline(content: &str) -> Outline {
+    let arena = Arena::new();
+    let root = parse_document(&arena, content, &options());
 
     let mut out = Outline {
         lines: content.lines().count(),
@@ -140,6 +144,86 @@ impl Outline {
     pub fn max_depth(&self) -> u8 {
         self.headings.iter().map(|h| h.level).max().unwrap_or(0)
     }
+}
+
+/// A paragraph as written: its lines, the lines that end in a hard break,
+/// and whether it sits in a blockquote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Paragraph {
+    pub lines: RangeInclusive<usize>,
+    pub hard_breaks: Vec<usize>,
+    pub quoted: bool,
+}
+
+/// What `fmt` needs to know about a file, all as 1-based source positions.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct FmtFacts {
+    pub paragraphs: Vec<Paragraph>,
+    /// `(line, column)` of every `*` or `+` bullet marker.
+    pub bullets: Vec<(usize, usize)>,
+    /// Lines of `#`-style headings (setext headings are left alone).
+    pub atx_headings: Vec<usize>,
+    /// Last line of the frontmatter block, if any.
+    pub frontmatter_end: Option<usize>,
+}
+
+pub fn fmt_facts(content: &str) -> FmtFacts {
+    let arena = Arena::new();
+    let root = parse_document(&arena, content, &options());
+    let mut facts = FmtFacts::default();
+    for node in root.descendants() {
+        let ast = node.data();
+        let pos = ast.sourcepos;
+        match &ast.value {
+            NodeValue::Paragraph => {
+                let hard_breaks = node
+                    .descendants()
+                    .filter(|d| matches!(d.data().value, NodeValue::LineBreak))
+                    .map(|d| d.data().sourcepos.start.line)
+                    .collect();
+                let quoted = node
+                    .ancestors()
+                    .skip(1)
+                    .any(|a| matches!(a.data().value, NodeValue::BlockQuote));
+                facts.paragraphs.push(Paragraph {
+                    lines: pos.start.line..=pos.end.line,
+                    hard_breaks,
+                    quoted,
+                });
+            }
+            // Items and task items (`* [ ]`) alike: the marker is the first
+            // non-blank byte from where the item starts.
+            NodeValue::List(list)
+                if list.list_type == ListType::Bullet
+                    && matches!(list.bullet_char, b'*' | b'+') =>
+            {
+                for item in node.children() {
+                    let start = item.data().sourcepos.start;
+                    let Some(text) = content.lines().nth(start.line - 1) else {
+                        continue;
+                    };
+                    let from = start.column - 1;
+                    if let Some(offset) = text
+                        .get(from..)
+                        .and_then(|rest| rest.find(|c: char| !c.is_whitespace()))
+                    {
+                        facts.bullets.push((start.line, from + offset + 1));
+                    }
+                }
+            }
+            NodeValue::Heading(h) if !h.setext => {
+                facts.atx_headings.push(pos.start.line)
+            }
+            NodeValue::FrontMatter(text) => {
+                // The literal includes the blank lines after the closing
+                // delimiter; the block ends at the last `---`.
+                let lines = text.trim_end().lines().count();
+                facts.frontmatter_end = Some(pos.start.line + lines - 1);
+            }
+            _ => {}
+        }
+    }
+    facts
 }
 
 /// A plain-text code block (no language, or `text`/`txt`/`ascii`) that draws
@@ -283,6 +367,33 @@ let s = \"+--\";
 ";
         let o = outline(content);
         assert_eq!(o.diagrams, vec![1, 7]);
+    }
+
+    #[test]
+    fn fmt_facts_positions() {
+        // Escapes, not a raw multi-line literal: line 6 must keep its two
+        // trailing spaces (a hard break), which editors tend to strip.
+        let content = concat!(
+            "---\nid: x\n---\n# Title\n",
+            "para one\ncontinues  \nafter break\n\n",
+            "> quoted\n> more\n\n",
+            "* star\n  + plus nested\n- dash\n",
+            "Setext\n======\n",
+        );
+        let f = fmt_facts(content);
+        assert_eq!(f.frontmatter_end, Some(3));
+        assert_eq!(f.atx_headings, vec![4]);
+        let paras: Vec<_> = f
+            .paragraphs
+            .iter()
+            .map(|p| (p.lines.clone(), p.hard_breaks.clone(), p.quoted))
+            .collect();
+        assert_eq!(paras[0], (5..=7, vec![6], false));
+        assert_eq!(paras[1], (9..=10, vec![], true));
+        assert_eq!(f.bullets, vec![(12, 1), (13, 3)]);
+
+        let tasks = fmt_facts("* [ ] task item\n * [x] indented\n");
+        assert_eq!(tasks.bullets, vec![(1, 1), (2, 2)]);
     }
 
     #[test]

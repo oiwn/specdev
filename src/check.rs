@@ -10,6 +10,7 @@ use serde::Serialize;
 use crate::Error;
 use crate::config::Config;
 use crate::diag::{Diagnostic, Severity};
+use crate::fmt;
 use crate::md;
 use crate::output::{self, Format, Report};
 use crate::quality;
@@ -38,6 +39,7 @@ pub fn run(root: &Path, staged: bool, format: Format) -> Result<(), Error> {
     }
     diagnostics.extend(status::spec_diagnostics(root)?);
     diagnostics.extend(quality::spec_diagnostics(root, &config)?);
+    diagnostics.extend(fmt::unformatted(root)?);
     diagnostics.extend(ctx_task_refs(root, store.as_ref())?);
 
     let errors = diagnostics

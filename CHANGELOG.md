@@ -11,6 +11,15 @@ task. This coexists with any conventional release notes already here.
 - files touched / decisions locked
 -->
 
+## 2026-10-05 — New specdev version: Phases 6–7
+
+Closes the ctx.md task "New specdev version and updated workflow" (started 2026-10-02). Phase 8 — skill, docs, dogfood, 0.3.0 release — moved to `specs/roadmap.md` → Next. Durable rules and gotchas from its Findings now live in `specs/overview.md`.
+
+- **Phase 6 — `task done`** (`src/task/done.rs`): approval → done, file moved to `specs/tasks/done/`, a dated CHANGELOG entry built from the task's one-line `## Summary`, index regenerated. Refuses without a Summary or while `## Manual checks` has unticked boxes; everything is checked before the first write. `check` adds `summary-missing` (warning, approval tasks) and `not-archived` (error). `state.rs` split its load/guard, log-append, and safety-net steps into shared helpers.
+- **Phase 7a — quality gate** (`src/quality.rs`): per-file `Metrics` (also behind `list --stats`, which gained `lines`/`code`/`tbl` columns) and `[quality.*]` thresholds per kind — task 150 lines / 8 plan steps / 6 scope, ctx 120, overview 200, CHANGELOG 400. Warnings by default, errors with `[quality] errors = true` (then the state commands' safety net also refuses, e.g. a `scope add` past `max_scope`). `forbid_tables` flags Markdown tables and ASCII box diagrams. Omitted keys in a kind's table keep their defaults; `0` turns a limit off.
+- **Phase 7b — `specdev fmt`** (`src/fmt.rs`): unwraps hard-wrapped paragraphs (not across hard breaks or `^^^`/`&&&` lines), `*`/`+` bullets → `-`, blank lines around `#` headings — by position from `md::fmt_facts`, every other byte kept. Covers `specs/*.md` and open task files; `check` warns `unformatted` on the same set. `init`'s templates are soft-wrapped now, and this repo's specs were reformatted with it.
+- This repo got its own `specdev.toml` (`forbid_tables = true`). 156 unit + 38 e2e tests; clippy `-D warnings` clean; `prek` passes.
+
 ## 2026-10-04 — New specdev version: Phases 3–5
 
 Part of the ongoing task "New specdev version and updated workflow" (Phases 6–8 remain in `specs/ctx.md`).
