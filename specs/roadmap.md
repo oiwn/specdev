@@ -4,7 +4,6 @@ Committed future direction, in rough priority order. The task pipeline ("Dark Fa
 
 ## Next — 0.3.0 release
 
-- **README**: CLI sections for `check`, `task …`, `fmt`, `--format`; a short task-pipeline section; `specdev.toml` keys; soft wraps.
 - **Examples**: a full task lifecycle in `references/examples.md` (file at draft, approved, done; the CHANGELOG entry).
 - **Dogfood here**: `--format json|toon` for `init` and `skill`, run as two real tasks through the pipeline (then remove `output::require_text`); collect friction, including from use in other projects.
 - **Tune `[quality]` defaults** from what real tasks hit.

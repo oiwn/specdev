@@ -28,7 +28,10 @@ jobs:
       - name: Generate code coverage
         run: cargo llvm-cov --locked --workspace --lcov --output-path lcov.info
 
+      # Codecov outages (TLS failures on cli.codecov.io / api.codecov.io) must not
+      # turn CI red; the step still shows as failed in the run.
       - name: Upload coverage to Codecov
+        continue-on-error: true
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
