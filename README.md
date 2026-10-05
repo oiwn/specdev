@@ -1,5 +1,10 @@
 # specdev
 
+[![CI](https://github.com/oiwn/specdev/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/oiwn/specdev/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/oiwn/specdev/graph/badge.svg)](https://codecov.io/gh/oiwn/specdev)
+[![Crates.io](https://img.shields.io/crates/v/specdev.svg)](https://crates.io/crates/specdev)
+[![License: MIT](https://img.shields.io/crates/l/specdev.svg)](https://crates.io/crates/specdev)
+
 Specification-driven development toolkit for humans and AI agents.
 
 `specdev` is a CLI and an agent skill that keep project work organized around Markdown specs. The CLI scaffolds the spec files, owns the structured state of tasks (status, stage, scope, history), and checks that everything stays in order. The skill teaches any coding agent how to read and update specs, run tasks through the pipeline, and route each piece of content to its home.
