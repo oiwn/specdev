@@ -172,18 +172,24 @@ forbid_tables = false                        # flag Markdown tables and ASCII di
 
 [quality.task]                               # omitted keys keep their defaults; 0 turns a limit off
 max_lines = 150
+max_words = 1000                             # catches soft-wrapped files whose line count stays low
 max_plan_steps = 8
 max_scope = 6
 
 [quality.ctx]
 max_lines = 120
+max_words = 600
 
 [quality.overview]
 max_lines = 200
+max_words = 1500
 
 [quality.changelog]
 max_lines = 400
+max_words = 3000
 ```
+
+`specdev list --stats` shows words, lines, and the other metrics per file.
 
 ## The spec workflow
 
