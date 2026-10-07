@@ -40,19 +40,24 @@ forbid_tables = false
 
 # Per file kind. Keys: max_lines, max_words, max_plan_steps, max_scope.
 # Omitted keys keep these defaults; 0 turns a limit off.
+# max_words catches soft-wrapped files whose line count stays low.
 [quality.task]
 max_lines = 150
+max_words = 1000
 max_plan_steps = 8
 max_scope = 6
 
 [quality.ctx]
 max_lines = 120
+max_words = 600
 
 [quality.overview]
 max_lines = 200
+max_words = 1500
 
 [quality.changelog]
 max_lines = 400
+max_words = 3000
 "#;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -115,9 +120,10 @@ pub struct Limits {
 }
 
 impl Limits {
-    fn lines(max: usize) -> Self {
+    fn size(max_lines: usize, max_words: usize) -> Self {
         Self {
-            max_lines: Some(max),
+            max_lines: Some(max_lines),
+            max_words: Some(max_words),
             ..Self::default()
         }
     }
@@ -193,11 +199,11 @@ impl Default for Quality {
             task: Limits {
                 max_plan_steps: Some(8),
                 max_scope: Some(6),
-                ..Limits::lines(150)
+                ..Limits::size(150, 1000)
             },
-            ctx: Limits::lines(120),
-            overview: Limits::lines(200),
-            changelog: Limits::lines(400),
+            ctx: Limits::size(120, 600),
+            overview: Limits::size(200, 1500),
+            changelog: Limits::size(400, 3000),
         }
     }
 }

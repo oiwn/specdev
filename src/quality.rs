@@ -293,6 +293,20 @@ code
     }
 
     #[test]
+    fn word_limit_catches_soft_wrapped_files() {
+        let config = Config::default();
+        let path = Path::new("t.md");
+        let wordy = format!("# Task: x\n\n{}\n", "word ".repeat(1000));
+        let diags = diagnostics(path, &wordy, Kind::Task, None, &config);
+        assert_eq!(codes(&diags), [("quality-words", Severity::Warning)]);
+        assert!(
+            diags[0]
+                .message
+                .contains("1003 words (max 1000 for task files)")
+        );
+    }
+
+    #[test]
     fn errors_mode_and_table_rule() {
         let mut config = Config::default();
         let content = "# Ideas\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```\n+--+\n|  |\n+--+\n```\n";

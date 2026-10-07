@@ -135,7 +135,7 @@ Run `specdev check` after every state change and before handing work back. Proje
 - **Log consistency** (`log-*`, `log-mismatch`): the frontmatter must equal what the `## Log` replays to. A mismatch means someone edited state by hand. Don't "repair" it by editing the log; tell the user what differs and let them decide.
 - **Scope** (`out-of-scope`): changed files (from git) outside the active task's scope. Add them with `task scope add --reason`, or revert the change. Anything under `specs/` and the project's `[scope] always_allowed` globs never count.
 - **Repo:** one active task (`active-tasks`), `_index.md` up to date (`index-stale` → `specdev task index`).
-- **Quality** (`quality-*`, `md-table`, `ascii-diagram`): files over their size limits, too many plan steps, too large a scope. Act on them: split the task, route content out of `ctx.md`, compress older CHANGELOG entries.
+- **Quality** (`quality-*`, `md-table`, `ascii-diagram`): files over their line or word limits, too many plan steps, too large a scope. Act on them: split the task, route content out of `ctx.md`, compress older CHANGELOG entries.
 - **Format** (`unformatted`): run `specdev fmt` rather than re-wrapping by hand.
 
 **Refusals are the safety net.** A state command that would leave the task failing `check` refuses and prints the diagnostics ("refused: this change would make `specdev check` fail"). Fix the cause in the prose or with the right command; never work around a refusal by editing frontmatter or the log.
@@ -156,6 +156,7 @@ Run `specdev check` after every state change and before handing work back. Proje
 
 Specs are often read in a terminal editor where rendered Markdown is unavailable. Write for plain text:
 
+- **Plain, simple English; say less.** Short sentences, common words, no filler or restating. Keep decisions, facts, and next steps; drop narration, hedging, and background the reader already has. If `check` reports `quality-words`, cut before you split.
 - **No Markdown tables.** One bullet per item, key in bold: `- **verify** — run Acceptance; pass → review, fail → fix.`
 - **No ASCII diagrams.** Describe flows as numbered steps; a one-line `draft → ready → done` is fine.
 - **Bullets and short sections** over long paragraphs. One idea per bullet.
