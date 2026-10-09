@@ -22,7 +22,7 @@ use crate::md;
 
 pub use frontmatter::Frontmatter;
 pub use id::{TaskId, validate_slug};
-pub use log::{LogEntry, LogEvent};
+pub use log::{Fix, LogEntry, LogEvent};
 pub use store::{INDEX_FILE, TASKS_DIR, TaskStore};
 
 /// Defines a hardcoded string enum with `as_str`, `FromStr`, `Display`, and
@@ -71,9 +71,15 @@ str_enum!(Status, "status" {
 });
 
 impl Status {
-    /// The one task being worked on: in progress, or waiting for the human.
+    /// Current work: in progress, or waiting for the user's acceptance.
     pub fn is_active(self) -> bool {
         matches!(self, Self::InProgress | Self::Approval)
+    }
+
+    /// The one exclusive slot: only an in-progress task holds it. Tasks in
+    /// approval wait for the user and don't stop the next task starting.
+    pub fn holds_slot(self) -> bool {
+        self == Self::InProgress
     }
 }
 
@@ -300,7 +306,7 @@ Prose mentioning ## Log inline stays prose.
                     status: Status::Ready,
                     stage: None,
                 },
-                attempts: None,
+                fix: None,
             },
         });
         let reparsed = Task::parse(&task.path, &task.render()).unwrap();

@@ -1,25 +1,113 @@
-//! `task done`: the last state change. Records `approval → done` in the log,
-//! moves the task file to `specs/tasks/done/`, adds a dated `CHANGELOG.md`
-//! entry built from the task's `## Summary`, and regenerates `_index.md`.
+//! `task done`: the last state change, for one task or a batch. Each task
+//! records the user's approval (optional) and `approval → done` in its log,
+//! moves to `specs/tasks/done/`, and gets a dated `CHANGELOG.md` entry built
+//! from its `## Summary`; `_index.md` is regenerated once at the end.
+//!
+//! Every task is checked before anything is written, so one blocked task
+//! stops the whole batch. Writes go changelog first, then the task file: a
+//! failure in between leaves the task in approval, and the retry skips the
+//! changelog entry it already wrote.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
+use serde::Serialize;
 
 use crate::Error;
 use crate::md;
-use crate::output::{self, Format};
+use crate::output::{self, Format, Report};
 
 use super::state::{self, StateReport, usage};
+use super::store::TaskStore;
 use super::{LogEvent, Position, Status, Task, TaskId};
 
-const CHANGELOG: &str = "CHANGELOG.md";
+pub const CHANGELOG: &str = "CHANGELOG.md";
 const SUMMARY: &str = "Summary";
 const MANUAL_CHECKS: &str = "Manual checks";
 
-pub fn done(root: &Path, query: &str, format: Format) -> Result<(), Error> {
-    let mut loaded = state::load(root, query)?;
+/// A task that passed every gate, with what closing it will write.
+struct Closing {
+    task: Task,
+    old_path: PathBuf,
+    entry: String,
+    report: StateReport,
+}
+
+pub fn done(
+    root: &Path,
+    queries: &[String],
+    approval: Option<&str>,
+    dry_run: bool,
+    format: Format,
+) -> Result<(), Error> {
+    let approval = approval
+        .map(|a| state::one_line("--approval", a))
+        .transpose()?;
+    let mut closing: Vec<Closing> = Vec::new();
+    let mut blockers = Vec::new();
+    for query in queries {
+        match prepare(root, query, approval) {
+            Ok(c) if closing.iter().any(|o| o.task.front.id == c.task.front.id) => {
+                blockers.push(format!("`{}` is listed twice", c.task.front.id));
+            }
+            Ok(c) => closing.push(c),
+            Err(e) => blockers.push(e.to_string()),
+        }
+    }
+    if !blockers.is_empty() {
+        let what = if queries.len() > 1 {
+            "nothing closed; fix these first:\n"
+        } else {
+            ""
+        };
+        return Err(usage(format!("{what}{}", blockers.join("\n"))));
+    }
+
+    let changelog_path = root.join(CHANGELOG);
+    if !dry_run {
+        let mut changelog = if changelog_path.exists() {
+            fs::read_to_string(&changelog_path)?
+        } else {
+            "# Changelog\n".to_string()
+        };
+        for c in &closing {
+            if !has_entry(&changelog, &c.task.front.id) {
+                changelog = insert_entry(&changelog, &c.entry);
+            }
+        }
+        fs::write(&changelog_path, changelog)?;
+        let store = TaskStore::open(root)?;
+        fs::create_dir_all(store.done_dir())?;
+        for c in &closing {
+            store.write_task(&c.task)?;
+            fs::remove_file(&c.old_path)?;
+        }
+    }
+    let index = if dry_run {
+        None
+    } else {
+        Some(TaskStore::open(root)?.write_index()?.display().to_string())
+    };
+
+    output::emit(
+        &DoneReport {
+            dry_run,
+            closed: closing.into_iter().map(|c| c.report).collect(),
+            changelog: changelog_path.display().to_string(),
+            index,
+        },
+        format,
+    )
+}
+
+/// Load one task and run every gate; nothing is written.
+fn prepare(
+    root: &Path,
+    query: &str,
+    approval: Option<&str>,
+) -> Result<Closing, Error> {
+    let loaded = state::load(root, query)?;
     let id = loaded.task.front.id.clone();
     let from = loaded.task.position();
     if from.status != Status::Approval {
@@ -32,7 +120,7 @@ pub fn done(root: &Path, query: &str, format: Format) -> Result<(), Error> {
         let (ticked, total) = outline.checkbox_counts_in(MANUAL_CHECKS);
         if ticked < total {
             return Err(usage(format!(
-                "`{id}`: {} of {total} `## {MANUAL_CHECKS}` items unticked; the human runs them before the task is done",
+                "`{id}`: {} of {total} `## {MANUAL_CHECKS}` items unticked; resolve each (agent or user evidence, or a user waiver) before the task is done",
                 total - ticked
             )));
         }
@@ -50,27 +138,27 @@ pub fn done(root: &Path, query: &str, format: Format) -> Result<(), Error> {
     let mut task = loaded.task.clone();
     task.front.status = to.status;
     task.front.stage = to.stage;
-    let log = state::append(
-        &mut task,
-        vec![LogEvent::Advance {
-            from,
-            to,
-            attempts: None,
-        }],
-    );
+    let mut events = Vec::new();
+    if let Some(quote) = approval {
+        events.push(LogEvent::Approved {
+            quote: quote.to_string(),
+        });
+    }
+    events.push(LogEvent::Advance {
+        from,
+        to,
+        fix: None,
+    });
+    let log = state::append(&mut task, events);
     let old_path = task.path.clone();
-    let done_dir = loaded.store.done_dir();
-    task.path = done_dir.join(old_path.file_name().unwrap_or_default());
+    task.path = loaded
+        .store
+        .done_dir()
+        .join(old_path.file_name().unwrap_or_default());
     if task.path.exists() {
         return Err(usage(format!("{} already exists", task.path.display())));
     }
     state::refuse_new_errors(&loaded, &task, root)?;
-    let changelog_path = root.join(CHANGELOG);
-    let existing = if changelog_path.exists() {
-        fs::read_to_string(&changelog_path)?
-    } else {
-        "# Changelog\n".to_string()
-    };
     let date = task
         .log
         .last()
@@ -83,28 +171,56 @@ pub fn done(root: &Path, query: &str, format: Format) -> Result<(), Error> {
         &id,
         task.front.source.as_deref(),
     );
-    let changelog = insert_entry(&existing, &entry);
+    let report = StateReport {
+        id,
+        from: from.to_string(),
+        to: to.to_string(),
+        via: Vec::new(),
+        log,
+        note: Some(task.path.display().to_string()),
+        index: String::new(),
+    };
+    Ok(Closing {
+        task,
+        old_path,
+        entry,
+        report,
+    })
+}
 
-    fs::create_dir_all(&done_dir)?;
-    loaded.store.write_task(&task)?;
-    fs::remove_file(&old_path)?;
-    fs::write(&changelog_path, changelog)?;
-    loaded.store.tasks.retain(|t| t.front.id != id);
-    let moved = task.path.display().to_string();
-    loaded.store.done.push(task);
-    let index = loaded.store.write_index()?;
+/// Whether the changelog already has this task's entry (a retried close).
+fn has_entry(changelog: &str, id: &TaskId) -> bool {
+    changelog.contains(&format!("- Task `{id}`"))
+}
 
-    output::emit(
-        &StateReport {
-            id,
-            from: from.to_string(),
-            to: to.to_string(),
-            log,
-            note: Some(format!("Moved to {moved}; added a {CHANGELOG} entry")),
-            index: index.display().to_string(),
-        },
-        format,
-    )
+#[derive(Serialize)]
+struct DoneReport {
+    dry_run: bool,
+    closed: Vec<StateReport>,
+    changelog: String,
+    index: Option<String>,
+}
+
+impl Report for DoneReport {
+    fn text(&self) -> String {
+        let mut out = Vec::new();
+        if self.dry_run {
+            out.push("Dry run: nothing written. Would close:".to_string());
+        }
+        // One line per task (the note is where it moves to); the log and
+        // index details are in the JSON output.
+        for r in &self.closed {
+            let moved = r.note.as_deref().unwrap_or_default();
+            out.push(format!("{} — {} → {} ({moved})", r.id, r.from, r.to));
+        }
+        let verb = if self.dry_run {
+            "Would update"
+        } else {
+            "Updated"
+        };
+        out.push(format!("{verb} {}", self.changelog));
+        out.join("\n")
+    }
 }
 
 /// The first prose line of `## Summary`: blank lines, code blocks, sub-

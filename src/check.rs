@@ -15,11 +15,18 @@ use crate::md;
 use crate::output::{self, Format, Report};
 use crate::quality;
 use crate::status;
-use crate::task::{INDEX_FILE, Status, TASKS_DIR, Task, TaskId, TaskStore};
+use crate::task::{
+    INDEX_FILE, LogEvent, Status, TASKS_DIR, Task, TaskId, TaskStore,
+};
 use crate::task::{done, transition};
 use crate::vcs;
 
-pub fn run(root: &Path, staged: bool, format: Format) -> Result<(), Error> {
+pub fn run(
+    root: &Path,
+    staged: bool,
+    verbose: bool,
+    format: Format,
+) -> Result<(), Error> {
     if !root.join("specs").is_dir() {
         return Err(Error::Usage(
             "No specs/ directory found. Run `specdev init` first.".to_string(),
@@ -46,9 +53,18 @@ pub fn run(root: &Path, staged: bool, format: Format) -> Result<(), Error> {
         .iter()
         .filter(|d| d.severity == Severity::Error)
         .count();
+    let warnings = diagnostics.len() - errors;
+    let summarized = if verbose {
+        0
+    } else {
+        summarize_unchanged_size_warnings(root, &mut diagnostics)
+    };
+    // Errors first; the sort is stable, so each group keeps its order.
+    diagnostics.sort_by_key(|d| d.severity != Severity::Error);
     let report = CheckReport {
-        warnings: diagnostics.len() - errors,
+        warnings,
         errors,
+        summarized,
         diagnostics,
     };
     output::emit(&report, format)?;
@@ -79,7 +95,7 @@ fn check_store(
     let active: Vec<&Task> = store
         .tasks
         .iter()
-        .filter(|t| t.front.status.is_active())
+        .filter(|t| t.front.status.holds_slot())
         .collect();
     if active.len() > 1 {
         let ids: Vec<String> =
@@ -90,7 +106,7 @@ fn check_store(
                 None,
                 "active-tasks",
                 format!(
-                    "{} tasks are active ({}); only one may be in-progress or approval",
+                    "{} tasks are in progress ({}); only one may be",
                     active.len(),
                     ids.join(", ")
                 ),
@@ -299,21 +315,31 @@ fn scope_lint(task: &Task, root: &Path) -> Vec<Diagnostic> {
     diags
 }
 
-/// Changed files (from git) against the active task's scope. Working-tree
-/// violations are errors; `--staged` (the pre-commit hook) only warns.
+/// Changed files (from git) against the scope of the in-progress task, or,
+/// when none is in progress, of the tasks awaiting approval (a file any of
+/// them covers is fine). Working-tree violations are errors; `--staged` (the
+/// pre-commit hook) only warns.
 fn scope_check(
     store: &TaskStore,
     config: &Config,
     root: &Path,
     staged: bool,
 ) -> Vec<Diagnostic> {
-    let active: Vec<&Task> = store
-        .tasks
-        .iter()
-        .filter(|t| t.front.status.is_active())
-        .collect();
-    // No active task: nothing to compare. Several: `active-tasks` reports it.
-    let [task] = active.as_slice() else {
+    let of = |status: Status| -> Vec<&Task> {
+        store
+            .tasks
+            .iter()
+            .filter(|t| t.front.status == status)
+            .collect()
+    };
+    let in_progress = of(Status::InProgress);
+    let owners = match in_progress.len() {
+        0 => of(Status::Approval),
+        1 => in_progress,
+        // Several: `active-tasks` reports it.
+        _ => return Vec::new(),
+    };
+    let Some(first) = owners.first() else {
         return Vec::new();
     };
     match vcs::changed_files(root, staged) {
@@ -323,21 +349,65 @@ fn scope_check(
             } else {
                 Severity::Error
             };
-            scope_violations(
-                task,
-                root,
-                &changed,
-                &config.scope.always_allowed,
-                severity,
-            )
+            let violations = |task: &Task| {
+                let changed = without_baseline(task, root, &changed);
+                scope_violations(
+                    task,
+                    root,
+                    &changed,
+                    &config.scope.always_allowed,
+                    severity,
+                )
+            };
+            let mut diags = violations(first);
+            for task in &owners[1..] {
+                let theirs: Vec<_> =
+                    violations(task).into_iter().map(|d| d.file).collect();
+                diags.retain(|d| theirs.contains(&d.file));
+            }
+            diags
         }
         vcs::Changes::Unavailable(reason) => vec![Diagnostic::warning(
-            &task.path,
+            &first.path,
             None,
             "scope-skipped",
             format!("scope check skipped: {reason}"),
         )],
     }
+}
+
+/// Files specdev and the spec workflow write, never part of a task's scope:
+/// everything under `specs/`, and the root `CHANGELOG.md` (`task done`).
+pub(crate) fn specdev_owned(path: &str) -> bool {
+    path.starts_with("specs/") || path == done::CHANGELOG
+}
+
+/// `changed` minus the files in the task's latest `baseline` log entry whose
+/// content is still what it was then: earlier work, not this task's. Once
+/// such a file changes again it counts.
+fn without_baseline(task: &Task, root: &Path, changed: &[String]) -> Vec<String> {
+    let Some(baseline) = task.log.iter().rev().find_map(|e| match &e.event {
+        LogEvent::Baseline(files) => Some(files),
+        _ => None,
+    }) else {
+        return changed.to_vec();
+    };
+    let candidates: Vec<String> = changed
+        .iter()
+        .filter(|p| baseline.iter().any(|(b, _)| b == *p))
+        .cloned()
+        .collect();
+    let Ok(now) = vcs::fingerprints(root, &candidates) else {
+        return changed.to_vec();
+    };
+    changed
+        .iter()
+        .filter(|p| {
+            !now.iter()
+                .any(|entry| baseline.contains(entry) && entry.0 == **p)
+        })
+        .cloned()
+        .collect()
 }
 
 /// Changed paths (relative to `root`) that neither the task's scope, `specs/`,
@@ -353,7 +423,7 @@ fn scope_violations(
     changed
         .iter()
         .filter(|path| {
-            !path.starts_with("specs/")
+            !specdev_owned(path)
                 && !always_allowed.iter().any(|e| covers(e, path))
                 && !task.front.scope.iter().any(|e| covers(e, path))
         })
@@ -374,7 +444,7 @@ fn scope_violations(
 /// Whether a scope entry covers `path`: a glob match (`*` stays inside a
 /// directory, `**` crosses), or for a plain entry the path itself or
 /// anything under it.
-fn covers(entry: &str, path: &str) -> bool {
+pub(crate) fn covers(entry: &str, path: &str) -> bool {
     let entry = entry.strip_prefix("./").unwrap_or(entry);
     if !entry.contains(['*', '?', '[']) {
         let entry = entry.trim_end_matches('/');
@@ -493,15 +563,25 @@ struct CheckReport {
     diagnostics: Vec<Diagnostic>,
     errors: usize,
     warnings: usize,
+    /// Size warnings for files without uncommitted changes, counted in
+    /// `warnings` but not listed (`--verbose` lists them).
+    summarized: usize,
 }
 
 impl Report for CheckReport {
     fn text(&self) -> String {
-        if self.diagnostics.is_empty() {
+        if self.errors + self.warnings == 0 {
             return "OK".to_string();
         }
         let mut out: Vec<String> =
             self.diagnostics.iter().map(ToString::to_string).collect();
+        if self.summarized > 0 {
+            out.push(format!(
+                "{} existing size {} in unchanged files (`specdev check --verbose` lists them)",
+                self.summarized,
+                plural(self.summarized, "warning")
+            ));
+        }
         out.push(format!(
             "{} {}, {} {}",
             self.errors,
@@ -511,6 +591,26 @@ impl Report for CheckReport {
         ));
         out.join("\n")
     }
+}
+
+/// Drop `quality-*` warnings for files git reports unchanged: they predate
+/// the current work and repeating them reads like a regression. Returns how
+/// many were dropped. Without git nothing is dropped.
+fn summarize_unchanged_size_warnings(
+    root: &Path,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> usize {
+    let vcs::Changes::Files(changed) = vcs::changed_files(root, false) else {
+        return 0;
+    };
+    let before = diagnostics.len();
+    diagnostics.retain(|d| {
+        let size_warning =
+            d.severity == Severity::Warning && d.code.starts_with("quality-");
+        let file = d.file.strip_prefix(root).unwrap_or(&d.file);
+        !size_warning || changed.iter().any(|c| Path::new(c) == file)
+    });
+    before - diagnostics.len()
 }
 
 fn plural(n: usize, word: &str) -> String {

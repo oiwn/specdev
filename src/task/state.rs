@@ -14,21 +14,28 @@ use crate::diag::{Diagnostic, Severity};
 use crate::md;
 use crate::output::{self, Format, Report};
 use crate::scan;
+use crate::vcs;
 
 use super::frontmatter::Value;
 use super::store::TaskStore;
 use super::transition;
-use super::{LogEntry, LogEvent, Position, Stage, Status, Task, TaskId};
+use super::{Fix, LogEntry, LogEvent, Position, Stage, Status, Task, TaskId};
 
-/// What a handler did: the log events to append and an optional note.
+/// What a handler did: the log events to append, an optional note, and the
+/// positions a multi-step `advance` passed through.
 struct Change {
     events: Vec<LogEvent>,
     note: Option<String>,
+    via: Vec<String>,
 }
 
 impl Change {
     fn log(events: Vec<LogEvent>) -> Self {
-        Self { events, note: None }
+        Self {
+            events,
+            note: None,
+            via: Vec::new(),
+        }
     }
 }
 
@@ -119,6 +126,7 @@ fn apply(
         id: task.front.id.clone(),
         from: loaded.task.position().to_string(),
         to: task.position().to_string(),
+        via: change.via,
         log,
         note: change.note,
         index: String::new(),
@@ -168,7 +176,7 @@ pub(super) fn usage(msg: impl Into<String>) -> Error {
 }
 
 /// A required, single-line text argument (log entries are one line each).
-fn one_line<'a>(what: &str, value: &'a str) -> Result<&'a str, Error> {
+pub(super) fn one_line<'a>(what: &str, value: &'a str) -> Result<&'a str, Error> {
     let value = value.trim();
     if value.is_empty() {
         return Err(usage(format!("{what} must not be empty")));
@@ -205,7 +213,7 @@ fn parse_target(s: &str) -> Result<Position, Error> {
             "use `specdev task block <id> --reason \"...\"` to block a task",
         )),
         (Status::Done, _) => Err(usage(
-            "finish a task with `specdev task done <id>` (after the merge)",
+            "finish an accepted task with `specdev task done <id>`",
         )),
         (Status::InProgress, None) => Err(usage(
             "`in-progress` needs a stage: implement, verify, review, or fix",
@@ -235,50 +243,138 @@ pub fn advance(
                 ))
             })?,
         };
-        if !transition::is_legal(from, to) {
+        // A direct move is one step; a later stage on the happy path is
+        // walked to one step at a time, every gate checked.
+        let steps = if transition::is_legal(from, to) {
+            vec![to]
+        } else if let Some(steps) = transition::path(from, to) {
+            steps
+        } else {
             return Err(usage(format!(
-                "`{id}` can't move from `{from}` to `{to}` (legal: {})",
+                "`{id}` can't move from `{from}` to `{to}` (legal: {}; later stages on the way are walked to, except out of draft)",
                 list(&transition::targets(from))
             )));
-        }
-        gates(task, store, from, to)?;
-
-        let entering_fix = to.stage == Some(Stage::Fix);
-        if entering_fix {
-            let attempts = task.front.attempts + 1;
-            let max = config.pipeline.max_attempts;
-            if attempts > max {
-                let reason = format!("attempts cap reached ({max})");
-                task.front.status = Status::Blocked;
-                task.front.stage = None;
-                task.front.blocked_reason = Some(reason.clone());
-                return Ok(Change {
-                    events: vec![LogEvent::Blocked {
-                        reason: reason.clone(),
-                    }],
-                    note: Some(format!(
-                        "not moved to fix: {reason}. The task is blocked; the human decides what happens next."
-                    )),
-                });
+        };
+        let walking = steps.len() > 1;
+        let mut events = Vec::new();
+        let mut notes = Vec::new();
+        let mut at = from;
+        for step in &steps {
+            if walking {
+                gates(task, store, at, *step).map_err(|e| {
+                    usage(format!("stopped at `{at} → {step}`: {e}"))
+                })?;
+            } else {
+                gates(task, store, at, *step)?;
             }
-            task.front.attempts = attempts;
+            let outcome = advance_step(root, task, config, at, *step);
+            events.extend(outcome.events);
+            notes.extend(outcome.note);
+            at = *step;
         }
-
-        let mut events = vec![LogEvent::Advance {
-            from,
-            to,
-            attempts: entering_fix.then_some(task.front.attempts),
-        }];
-        if from.status == Status::Draft && to.status == Status::Ready {
-            events.push(LogEvent::ScopeApproved(task.front.scope.clone()));
-        }
-        if from.status == Status::Blocked {
-            task.front.blocked_reason = None;
-        }
-        task.front.status = to.status;
-        task.front.stage = to.stage;
-        Ok(Change::log(events))
+        let via = steps[..steps.len() - 1]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        Ok(Change {
+            events,
+            note: (!notes.is_empty()).then(|| notes.join("\n")),
+            via,
+        })
     })
+}
+
+/// One legal, gated move: update the frontmatter and return its events.
+/// A repair past the cap blocks the task instead.
+fn advance_step(
+    root: &Path,
+    task: &mut Task,
+    config: &Config,
+    from: Position,
+    to: Position,
+) -> Change {
+    // Only a failed verify is a repair attempt (capped); review notes and
+    // user feedback are revisions.
+    let fix = (to.stage == Some(Stage::Fix)).then(|| {
+        if from.stage == Some(Stage::Verify) {
+            Fix::Attempt(task.front.attempts + 1)
+        } else {
+            Fix::Revision
+        }
+    });
+    if let Some(Fix::Attempt(attempts)) = fix {
+        let max = config.pipeline.max_attempts;
+        if attempts > max {
+            let reason = format!("repair attempts cap reached ({max})");
+            task.front.status = Status::Blocked;
+            task.front.stage = None;
+            task.front.blocked_reason = Some(reason.clone());
+            return Change {
+                events: vec![LogEvent::Blocked {
+                    reason: reason.clone(),
+                }],
+                note: Some(format!(
+                    "not moved to fix: {reason}. The task is blocked; the human decides what happens next."
+                )),
+                via: Vec::new(),
+            };
+        }
+        task.front.attempts = attempts;
+    }
+
+    let mut events = vec![LogEvent::Advance { from, to, fix }];
+    let mut note = None;
+    if from.status == Status::Draft && to.status == Status::Ready {
+        events.push(LogEvent::ScopeApproved(task.front.scope.clone()));
+    }
+    if to.status.holds_slot()
+        && !from.status.holds_slot()
+        && let Some(baseline) = baseline(root, task, config)
+    {
+        if let LogEvent::Baseline(files) = &baseline {
+            note = Some(format!(
+                "baseline: {} file(s) already changed outside the scope; ignored until edited again",
+                files.len()
+            ));
+        }
+        events.push(baseline);
+    }
+    if from.status == Status::Blocked {
+        task.front.blocked_reason = None;
+    }
+    task.front.status = to.status;
+    task.front.stage = to.stage;
+    Change {
+        events,
+        note,
+        via: Vec::new(),
+    }
+}
+
+/// Changed files outside the task's scope at the moment it (re)enters
+/// in-progress: earlier, uncommitted work that isn't this task's. `check`
+/// ignores them until their content changes. `None` without git or when
+/// there's nothing to record.
+fn baseline(root: &Path, task: &Task, config: &Config) -> Option<LogEvent> {
+    let vcs::Changes::Files(changed) = vcs::changed_files(root, false) else {
+        return None;
+    };
+    let foreign: Vec<String> = changed
+        .into_iter()
+        .filter(|p| {
+            !check::specdev_owned(p)
+                // `, ` separates log entries; such a path just isn't recorded.
+                && !p.contains(", ")
+                && !config.scope.always_allowed.iter().any(|e| check::covers(e, p))
+                && !task.front.scope.iter().any(|e| check::covers(e, p))
+        })
+        .collect();
+    if foreign.is_empty() {
+        return None;
+    }
+    vcs::fingerprints(root, &foreign)
+        .ok()
+        .map(LogEvent::Baseline)
 }
 
 /// Stage gates beyond the transition table.
@@ -297,15 +393,15 @@ fn gates(
             )));
         }
     }
-    if to.status == Status::InProgress
-        && !from.status.is_active()
+    if to.status.holds_slot()
+        && !from.status.holds_slot()
         && let Some(other) = store
             .tasks
             .iter()
-            .find(|t| t.front.id != *id && t.front.status.is_active())
+            .find(|t| t.front.id != *id && t.front.status.holds_slot())
     {
         return Err(usage(format!(
-            "`{}` is already active ({}); one task at a time",
+            "`{}` is already in progress ({}); one task at a time",
             other.front.id,
             other.position()
         )));
@@ -320,12 +416,30 @@ fn gates(
         }
         Ok(())
     };
+    if from.stage == Some(Stage::Review) && to.status == Status::Approval {
+        let outline = md::outline(&task.body);
+        let written = outline.section(REVIEW).is_some_and(|range| {
+            task.body.lines().enumerate().any(|(i, line)| {
+                let line = line.trim();
+                range.contains(&(i + 1))
+                    && !line.is_empty()
+                    && !line.starts_with('#')
+            })
+        });
+        if !written {
+            return Err(usage(format!(
+                "`{id}` needs a `## {REVIEW}` with your review of the diff against Plan and scope before approval"
+            )));
+        }
+    }
     match (from.stage, to.stage) {
         (Some(Stage::Implement), Some(Stage::Verify)) => ticked("Plan"),
         (Some(Stage::Verify), Some(Stage::Review)) => ticked("Acceptance"),
         _ => Ok(()),
     }
 }
+
+const REVIEW: &str = "Review";
 
 pub fn block(
     root: &Path,
@@ -433,18 +547,28 @@ fn scope_path(path: &str) -> Result<String, Error> {
 pub fn scope_add(
     root: &Path,
     query: &str,
-    path: &str,
+    paths: &[String],
     reason: &str,
     format: Format,
 ) -> Result<(), Error> {
-    let path = scope_path(path)?;
+    let paths = paths
+        .iter()
+        .map(|p| scope_path(p))
+        .collect::<Result<Vec<_>, _>>()?;
     let reason = one_line("--reason", reason)?.to_string();
     apply(root, query, format, |task, _, _| {
-        if task.front.scope.contains(&path) {
-            return Err(usage(format!("`{path}` is already in scope")));
+        let mut events = Vec::new();
+        for path in paths {
+            if task.front.scope.contains(&path) {
+                return Err(usage(format!("`{path}` is already in scope")));
+            }
+            task.front.scope.push(path.clone());
+            events.push(LogEvent::ScopeAdd {
+                path,
+                reason: reason.clone(),
+            });
         }
-        task.front.scope.push(path.clone());
-        Ok(Change::log(vec![LogEvent::ScopeAdd { path, reason }]))
+        Ok(Change::log(events))
     })
 }
 
@@ -469,23 +593,36 @@ pub(super) struct StateReport {
     pub id: TaskId,
     pub from: String,
     pub to: String,
+    /// Positions a multi-step `advance` passed through.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub via: Vec<String>,
     pub log: Vec<String>,
     pub note: Option<String>,
     pub index: String,
 }
 
+/// Text is kept short: a move is one line (its log lines say the same), a
+/// field or scope change shows what was logged. JSON carries everything.
 impl Report for StateReport {
     fn text(&self) -> String {
-        let mut out = vec![if self.from == self.to {
-            format!("{} — {}", self.id, self.to)
+        let mut out = Vec::new();
+        if self.from == self.to {
+            out.push(format!("{} — {}", self.id, self.to));
+            out.extend(self.log.iter().map(|line| format!("  log: {line}")));
+        } else if self.via.is_empty() {
+            out.push(format!("{} — {} → {}", self.id, self.from, self.to));
         } else {
-            format!("{} — {} → {}", self.id, self.from, self.to)
-        }];
-        out.extend(self.log.iter().map(|line| format!("  log: {line}")));
-        if let Some(note) = &self.note {
-            out.push(format!("Note: {note}"));
+            out.push(format!(
+                "{} — {} → {} (via {})",
+                self.id,
+                self.from,
+                self.to,
+                self.via.join(", ")
+            ));
         }
-        out.push(format!("Updated {}", self.index));
+        if let Some(note) = &self.note {
+            out.extend(note.lines().map(|line| format!("Note: {line}")));
+        }
         out.join("\n")
     }
 }

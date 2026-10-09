@@ -55,22 +55,24 @@ The skill installs to `~/.agents/skills/specdev/SKILL.md`, where any [Agent Skil
 ## Two ways to track work
 
 - **`ctx.md`** — the working context. Design work and big, fuzzy work run here directly, with a checkbox plan, through the ideas → roadmap → ctx → changelog loop. When a task file is active, `ctx.md` just points at it.
-- **Task files** (`specs/tasks/<id>.md`) — one well-defined piece of work, sized to land as one commit. specdev owns its frontmatter and `## Log`; the agent and the human own the prose. It moves through a fixed pipeline, one active task at a time.
+- **Task files** (`specs/tasks/<id>.md`) — one well-defined piece of work, sized to land as one commit. specdev owns its frontmatter and `## Log`; the agent and the human own the prose. It moves through a fixed pipeline, one task in progress at a time.
 
 ## The task pipeline
 
 Happy path: draft → ready → implement → verify → review → approval → done. Failures loop through fix.
 
 1. **draft** — `specdev task new <slug>`; the agent declares `scope` and writes Plan and Acceptance; the human reviews with `^^^` remarks. Approved → `specdev task advance` → ready (records the approved scope; refused while remarks are open).
-2. **ready** — queued; `advance` starts it when no other task is active.
-3. **implement** — code inside `scope` only; new files are declared first with `specdev task scope <id> add <path> --reason "…"`. All Plan boxes ticked → verify.
-4. **verify** — the agent runs the Acceptance commands and ticks what passed (specdev runs nothing itself). All ticked → review; failures → `--to fix`.
-5. **review** — the diff is judged against Plan and scope; `## Review` is written. Approve → approval; changes → fix.
-6. **fix** — address the review; back to verify. Past `max_attempts` the task is blocked automatically.
-7. **approval** — the agent stops. The human runs `## Manual checks`, opens the PR, merges.
-8. **done** — `specdev task done <id>`: archives the file to `tasks/done/` and writes a CHANGELOG entry from the task's one-line `## Summary`.
+2. **ready** — queued; `advance` starts it when no other task is in progress.
+3. **implement** — code inside `scope` only; new files are declared first with `specdev task scope <id> add <path>... --reason "…"`. Files already dirty when the task starts are its baseline and don't count against scope until edited again. All Plan boxes ticked → verify.
+4. **verify** — the agent runs the Acceptance commands and ticks what passed (specdev runs nothing itself). All ticked → review; failures → `--to fix` (a repair attempt).
+5. **review** — the diff is judged against Plan and scope; `## Review` is written (required to leave review). Approve → approval; changes → fix (a revision).
 
-Any open task can be parked with `specdev task block <id> --reason "…"`; the human decides where it goes next. specdev never writes to git and never runs project commands — branches, commits, PRs, and tests stay with you and your agent.
+When the work is done, `specdev task advance <id> --to approval` walks implement → verify → review → approval in one call, checking every gate and logging every step.
+6. **fix** — address the review, feedback, or failure; back to verify. Past `max_attempts` failed verifies the task is blocked automatically; revisions don't count.
+7. **approval** — the agent shows the result; the user accepts it in plain words ("looks good"). Other tasks can start meanwhile.
+8. **done** — `specdev task done <id>... --approval "<quote>"`: logs the approval, archives to `tasks/done/`, writes a CHANGELOG entry from the one-line `## Summary`. Done means accepted, not merged: close tasks before the final PR commit, then commit, merge, and deploy.
+
+A task with a real obstacle can be blocked with `specdev task block <id> --reason "…"`; the human decides where it goes next. Waiting for a merge is not blocked. specdev never writes to git and never runs project commands — branches, commits, PRs, and tests stay with you and your agent.
 
 ## CLI commands
 
@@ -87,11 +89,11 @@ All commands run from the project root. The global `--format json|toon` flag giv
 - `specdev task new <slug>` — create a draft task file (next free number) with the sections from `specdev.toml`.
 - `specdev task list` — open tasks in queue order: active, ready, draft, blocked.
 - `specdev task show <id>` — state, scope, plan progress, log, and the next step.
-- `specdev task advance <id> [--to <target>]` — move to the next stage, or to `draft`, `ready`, `approval`, or a stage (`implement`, `verify`, `review`, `fix`). Gates: no open `^^^` for draft → ready, Plan ticked for implement → verify, Acceptance ticked for verify → review, one active task.
-- `specdev task block <id> --reason "…"` — park a task.
+- `specdev task advance <id> [--to <target>]` — move to the next stage, or to `draft`, `ready`, `approval`, or a stage (`implement`, `verify`, `review`, `fix`). A later stage on the happy path is walked to step by step (never out of draft); a failing gate stops the walk and writes nothing. Gates: no open `^^^` for draft → ready, Plan ticked for implement → verify, Acceptance ticked for verify → review, `## Review` written for review → approval, one task in progress. Entering in-progress records a baseline of files already changed outside the scope.
+- `specdev task block <id> --reason "…"` — block a task on a real obstacle.
 - `specdev task set <id> <field> <value>` — plain fields: `source`, `depends` (comma-separated ids), and extra fields from `specdev.toml`; `""` clears.
-- `specdev task scope <id> add <path> --reason "…"` / `specdev task scope <id> rm <path>` — change the scope; every change is logged.
-- `specdev task done <id>` — finish an approved task (needs `## Summary`; `## Manual checks` ticked).
+- `specdev task scope <id> add <path>... --reason "…"` / `specdev task scope <id> rm <path>` — change the scope; every change is logged.
+- `specdev task done <id>... [--approval "<quote>"] [--dry-run]` — close accepted tasks (each needs `## Summary` and every `## Manual checks` box resolved). All are checked first; one blocker closes nothing. A retry never duplicates a CHANGELOG entry.
 - `specdev task index` — regenerate `specs/tasks/_index.md`.
 
 Every state command rewrites only the frontmatter and appends to `## Log`, and refuses a change that would make `specdev check` fail:
@@ -99,22 +101,26 @@ Every state command rewrites only the frontmatter and appends to `## Log`, and r
 ```
 $ specdev task advance 1
 0001-status-freshness — ready → in-progress/implement
-  log: 2026-10-05 advance ready → in-progress/implement
-Updated specs/tasks/_index.md
 
-$ specdev task advance 1
-error: `0001-status-freshness`: 1 of 1 `## Plan` items unticked; tick them before moving on
+$ specdev task advance 1 --to approval
+error: stopped at `in-progress/implement → in-progress/verify`: `0001-status-freshness`: 1 of 1 `## Plan` items unticked; tick them before moving on
+
+$ specdev task advance 1 --to approval
+0001-status-freshness — in-progress/implement → approval (via in-progress/verify, in-progress/review)
 ```
+
+Text output is one line per move; `--format json` adds the log lines and the regenerated index.
 
 ### Checking
 
 - `specdev check` — validate everything; errors exit 1, warnings don't:
   - task contract: required sections, fields, ids, `depends`;
   - log consistency: each task's frontmatter must match what its own `## Log` replays to, so hand edits are caught without git;
-  - one active task; `_index.md` up to date;
-  - scope: files changed in git outside the active task's `scope` (anything under `specs/` and `[scope] always_allowed` are exempt);
+  - one task in progress; `_index.md` up to date;
+  - scope: files changed in git outside the in-progress task's `scope`, or with none in progress, outside every approval task's scope (anything under `specs/`, `[scope] always_allowed`, and unchanged baseline files are exempt);
   - quality gate: size and plan limits per file kind, optional no-tables rule;
   - formatting, and the `ctx.md` warnings from `status`.
+- Errors print first. Size warnings for files without uncommitted changes collapse into one line; `--verbose` lists them.
 - `specdev check --staged` — the same, checking only staged files against the scope, as warnings; meant for a pre-commit hook.
 
 ```
@@ -128,7 +134,7 @@ specs/tasks/_index.md: error[index-stale]: out of date; run `specdev task index`
 
 ### Inspecting
 
-- `specdev scan` — `^^^` remarks across `specs/`, resolved (with an adjacent `&&&` answer) or open.
+- `specdev scan` — `^^^` remarks across `specs/` and open task files, resolved (with an adjacent `&&&` answer) or open.
 - `specdev status` — spec file health: line counts, last modified, marker counts, `ctx.md` plan progress, and warnings (archive nudge, forbidden content in `ctx.md`, missing root files).
 - `specdev list [--stats]` — spec files with their first header and line count; `--stats` adds headings by level, checkboxes, open remarks, words, lines, code blocks, and tables.
 
@@ -158,7 +164,7 @@ optional_sections = ["Summary", "Manual checks", "Context", "Findings", "Review"
 extra_fields = []                            # project-specific frontmatter fields for `task set`
 
 [pipeline]
-max_attempts = 3                             # entries into fix before the task is blocked
+max_attempts = 3                             # failed verifies before the task is blocked; revisions don't count
 
 [acceptance]
 default = []                                 # pre-filled Acceptance items, e.g. ["cargo test"]

@@ -49,12 +49,13 @@ impl Report for ListReport {
         if self.files.is_empty() {
             return "No spec files found in specs/".to_string();
         }
+        let w = name_width(self.files.iter().map(|f| f.file.as_str()));
         let mut out =
-            format!("{:<16} {:<42} {:>5}", "File", "Description", "Lines");
+            format!("{:<w$} {:<42} {:>5}", "File", "Description", "Lines");
         for f in &self.files {
             let desc = f.description.as_deref().unwrap_or("(no header)");
             out.push_str(&format!(
-                "\n{:<16} {:<42} {:>5}",
+                "\n{:<w$} {:<42} {:>5}",
                 f.file,
                 truncate(desc, 42),
                 f.lines
@@ -62,6 +63,11 @@ impl Report for ListReport {
         }
         out
     }
+}
+
+/// The File column's width: the longest name, at least 16.
+fn name_width<'a>(names: impl Iterator<Item = &'a str>) -> usize {
+    names.map(|n| n.chars().count()).max().unwrap_or(0).max(16)
 }
 
 fn list_report(specs_dir: &Path, files: &[String]) -> Result<ListReport, Error> {
@@ -100,8 +106,9 @@ impl Report for StatsReport {
         if self.files.is_empty() {
             return "No spec files found in specs/".to_string();
         }
+        let w = name_width(self.files.iter().map(|f| f.file.as_str()));
         let mut out = format!(
-            "{:<16} {:>2} {:>2} {:>2} {:>3} {:>4} {:>4} {:>5} {:>6} {:>5} {:>4} {:>3}",
+            "{:<w$} {:>2} {:>2} {:>2} {:>3} {:>4} {:>4} {:>5} {:>6} {:>5} {:>4} {:>3}",
             "File",
             "H1",
             "H2",
@@ -118,7 +125,7 @@ impl Report for StatsReport {
         for s in &self.files {
             let m = &s.metrics;
             out.push_str(&format!(
-                "\n{:<16} {:>2} {:>2} {:>2} {:>3} {:>4} {:>4} {:>5} {:>6} {:>5} {:>4} {:>3}",
+                "\n{:<w$} {:>2} {:>2} {:>2} {:>3} {:>4} {:>4} {:>5} {:>6} {:>5} {:>4} {:>3}",
                 s.file,
                 s.h1,
                 s.h2,
@@ -181,6 +188,21 @@ fn collect_ordered(specs_dir: &Path) -> Result<Vec<String>, Error> {
         .collect();
     rest.sort();
     ordered.extend(rest);
+
+    // Open task files follow, as `tasks/<id>.md` (done/ and `_index.md` stay
+    // out: they're history and generated).
+    let tasks = specs_dir.join("tasks");
+    if tasks.is_dir() {
+        let mut open: Vec<String> = fs::read_dir(&tasks)?
+            .filter_map(Result::ok)
+            .filter(|e| e.path().is_file())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|f| f.ends_with(".md") && !f.starts_with('_'))
+            .map(|f| format!("tasks/{f}"))
+            .collect();
+        open.sort();
+        ordered.extend(open);
+    }
     Ok(ordered)
 }
 
