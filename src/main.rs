@@ -68,6 +68,9 @@ enum Commands {
         /// Check only staged files against the scope, as warnings (pre-commit)
         #[arg(long)]
         staged: bool,
+        /// List every size warning instead of summarizing those for unchanged files
+        #[arg(long)]
+        verbose: bool,
     },
     /// List spec files; use --stats for a structural breakdown
     List {
@@ -107,7 +110,8 @@ enum TaskCommands {
     Advance {
         /// Task id, sequence number, or slug
         id: String,
-        /// Target: draft, ready, approval, or a stage (implement, verify, review, fix)
+        /// Target: draft, ready, approval, or a stage (implement, verify, review, fix).
+        /// A later stage is walked to step by step, checking every gate (never out of draft)
         #[arg(long)]
         to: Option<String>,
     },
@@ -127,10 +131,17 @@ enum TaskCommands {
         /// New value; "" clears. depends takes comma-separated task ids
         value: String,
     },
-    /// Finish an approved task: log it, move it to done/, add a CHANGELOG entry
+    /// Finish accepted tasks: log them, move them to done/, add CHANGELOG entries
     Done {
-        /// Task id, sequence number, or slug
-        id: String,
+        /// Task ids, sequence numbers, or slugs; all are checked before any is closed
+        #[arg(required = true)]
+        ids: Vec<String>,
+        /// The user's acceptance in their words, recorded in each task's log
+        #[arg(long)]
+        approval: Option<String>,
+        /// Show what would be closed, or why not, without writing anything
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Add or remove a scope entry; every change is logged
     Scope {
@@ -143,9 +154,10 @@ enum TaskCommands {
 
 #[derive(Subcommand, Debug, PartialEq)]
 enum ScopeAction {
-    /// Add a file or glob to the task's scope
+    /// Add files or globs to the task's scope
     Add {
-        path: String,
+        #[arg(required = true)]
+        paths: Vec<String>,
         /// Why the task needs it
         #[arg(long)]
         reason: String,
@@ -175,7 +187,9 @@ fn main() {
         }
         Commands::Scan => scan::run(Path::new(""), format),
         Commands::Status => status::run(Path::new(""), format),
-        Commands::Check { staged } => check::run(Path::new(""), staged, format),
+        Commands::Check { staged, verbose } => {
+            check::run(Path::new(""), staged, verbose, format)
+        }
         Commands::Fmt { files } => fmt::run(Path::new(""), &files, format),
         Commands::List { stats } => list::run(stats, format),
         Commands::Skill { command } => output::require_text("skill", format)
@@ -190,7 +204,17 @@ fn main() {
                 TaskCommands::List => task::cmd::list(root, format),
                 TaskCommands::Show { id } => task::cmd::show(root, &id, format),
                 TaskCommands::Index => task::cmd::index(root, format),
-                TaskCommands::Done { id } => task::done::done(root, &id, format),
+                TaskCommands::Done {
+                    ids,
+                    approval,
+                    dry_run,
+                } => task::done::done(
+                    root,
+                    &ids,
+                    approval.as_deref(),
+                    dry_run,
+                    format,
+                ),
                 TaskCommands::Advance { id, to } => {
                     task::state::advance(root, &id, to.as_deref(), format)
                 }
@@ -201,8 +225,8 @@ fn main() {
                     task::state::set(root, &id, &field, &value, format)
                 }
                 TaskCommands::Scope { id, action } => match action {
-                    ScopeAction::Add { path, reason } => {
-                        task::state::scope_add(root, &id, &path, &reason, format)
+                    ScopeAction::Add { paths, reason } => {
+                        task::state::scope_add(root, &id, &paths, &reason, format)
                     }
                     ScopeAction::Rm { path } => {
                         task::state::scope_rm(root, &id, &path, format)
@@ -245,10 +269,19 @@ mod tests {
 
     #[test]
     fn parses_check() {
-        assert_eq!(cli(&["check"]).unwrap(), Commands::Check { staged: false });
         assert_eq!(
-            cli(&["check", "--staged"]).unwrap(),
-            Commands::Check { staged: true }
+            cli(&["check"]).unwrap(),
+            Commands::Check {
+                staged: false,
+                verbose: false
+            }
+        );
+        assert_eq!(
+            cli(&["check", "--staged", "--verbose"]).unwrap(),
+            Commands::Check {
+                staged: true,
+                verbose: true
+            }
         );
     }
 
@@ -277,15 +310,19 @@ mod tests {
             }
         );
         assert_eq!(
-            task(&["task", "scope", "3", "add", "src/a.rs", "--reason", "r"]),
+            task(&[
+                "task", "scope", "3", "add", "src/a.rs", "src/b.rs", "--reason",
+                "r"
+            ]),
             TaskCommands::Scope {
                 id: "3".into(),
                 action: ScopeAction::Add {
-                    path: "src/a.rs".into(),
+                    paths: vec!["src/a.rs".into(), "src/b.rs".into()],
                     reason: "r".into()
                 }
             }
         );
+        assert!(cli(&["task", "scope", "3", "add", "--reason", "r"]).is_err());
         assert_eq!(
             task(&["task", "set", "3", "source", ""]),
             TaskCommands::Set {
@@ -299,9 +336,14 @@ mod tests {
             "--reason is required"
         );
         assert_eq!(
-            task(&["task", "done", "3"]),
-            TaskCommands::Done { id: "3".into() }
+            task(&["task", "done", "3", "5", "--approval", "looks good"]),
+            TaskCommands::Done {
+                ids: vec!["3".into(), "5".into()],
+                approval: Some("looks good".into()),
+                dry_run: false
+            }
         );
+        assert!(cli(&["task", "done"]).is_err(), "an id is required");
     }
 
     #[test]

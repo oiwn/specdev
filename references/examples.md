@@ -192,3 +192,46 @@ Implement the trending-entities query.
 
 Nothing was lost. Everything went where it belongs, and `ctx.md` is now narrow
 enough that any agent can resume the task in one read.
+
+## Example 6: Small task, immediate approval
+
+Task 0007 changes one caption string. Acceptance holds the repo's hook commands; there are no Manual checks.
+
+1. `task new caption-parens`, `task scope 7 add src/components/caption.rs --reason "the literal"`, write Plan, Acceptance, Summary. User: "go".
+2. `advance 7` (ready), `advance 7` (implement), edit, tick Plan, run Acceptance and tick, write one Review line, then `advance 7 --to approval` — one call walks verify and review, checking each gate.
+3. Agent: "Caption now reads `… (circles scaled linearly by radius)`. Checks pass."
+4. User: "looks good".
+5. `specdev task done 7 --approval "looks good"`, point `ctx.md` at the next task. No further questions.
+
+## Example 7: Feedback adds a requirement
+
+Task 0008 is in approval. User: "headings look good, but translate the pagination too".
+
+- That is a revision, not acceptance. `advance 8 --to fix` (logged as a revision; it doesn't use the repair budget).
+- Add a Plan step for pagination; if it touches new files, `task scope 8 add <paths>... --reason "pagination labels"`.
+- Replace the Findings/Review paragraphs with the current state; don't add a new paragraph per round.
+- Verify, review, approval, show the user again.
+
+## Example 8: Batch acceptance and closing before the PR commit
+
+Tasks 0009, 0011, and 0013 are in approval. Agent: "0009 icon, 0011 counter links, 0013 abbreviations are ready." User: "all three look good".
+
+1. `specdev task done 9 11 13 --dry-run` → shows any blocker per task. 0011 has a Manual check left: "zh-CN mobile layout".
+2. Agent asks once: "0011 still has the zh-CN mobile check — did you look, or waive it?" User: "skip it".
+3. Tick: `- [x] zh-CN mobile layout — waived by user: "skip it"`.
+4. `specdev task done 9 11 13 --approval "all three look good"`. Reconcile `ctx.md`.
+5. Agent: "Closed 0009, 0011, 0013. Worktree passes `specdev check` and the hooks; ready for you to commit." The user commits (version bump included), merges, deploys.
+
+## Example 9: A required check fails after it looked done
+
+Task 0010 is in verify. The focused tests passed, but the repo's hook command `cargo test --workspace --all-features` fails.
+
+- `advance 10 --to fix` from verify counts as a repair attempt. Fix, rerun the *full* command, tick, continue.
+- Add the full command to Acceptance (and to `[acceptance] default` in `specdev.toml`) so the next task runs it.
+
+## Example 10: Defect found after a task closed
+
+0012 is in `tasks/done/`; the user reports a broken sitemap link.
+
+- Don't reopen 0012. `task new sitemap-link-fix`, `task set 15 depends 0012-seo-audit-fixes`, `task set 15 source "user report: broken sitemap link"`.
+- The history of 0012 stays intact; the fix is its own task.

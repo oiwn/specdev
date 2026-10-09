@@ -142,10 +142,10 @@ fn next_step(position: Position) -> &'static str {
             "Fill Plan, scope, and Acceptance; the human reviews with ^^^. Once approved, compress the remarks and advance to ready."
         }
         (Status::Ready, _) => {
-            "Queued. Starts when no other task is active: advance to in-progress."
+            "Queued. Starts when no other task is in progress: advance to in-progress."
         }
         (Status::InProgress, Some(Stage::Implement)) => {
-            "Implement inside scope and tick Plan boxes; then advance to verify."
+            "Implement inside scope and tick Plan boxes; run Acceptance and tick, write ## Review, then `advance <id> --to approval` (one call, every gate checked)."
         }
         (Status::InProgress, Some(Stage::Verify)) => {
             "Run the Acceptance commands and the scope check; pass → review, fail → fix."
@@ -158,7 +158,7 @@ fn next_step(position: Position) -> &'static str {
         }
         (Status::InProgress, None) => "Invalid state: in-progress without a stage.",
         (Status::Approval, _) => {
-            "Human: tick ## Manual checks, open the PR, and merge; with a one-line ## Summary in place, then `specdev task done <id>`."
+            "Show the result; once the user accepts it, resolve ## Manual checks (agent/user evidence or waiver) and run `specdev task done <id> --approval \"<their words>\"` before the PR commit."
         }
         (Status::Done, _) => "Done.",
         (Status::Blocked, _) => {
@@ -176,7 +176,7 @@ struct NewReport {
 
 impl Report for NewReport {
     fn text(&self) -> String {
-        format!("Created {}\nUpdated {}", self.path, self.index)
+        format!("Created {}", self.path)
     }
 }
 

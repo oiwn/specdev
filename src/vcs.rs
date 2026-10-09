@@ -51,6 +51,47 @@ pub fn changed_files(root: &Path, staged: bool) -> Changes {
     Changes::Files(files)
 }
 
+/// A path's content as it is now: git's blob id (shortened) for a file,
+/// `deleted` for a path that's gone. Read-only: `hash-object` without `-w`
+/// writes nothing to the repository.
+pub fn fingerprints(
+    root: &Path,
+    paths: &[String],
+) -> Result<Vec<(String, String)>, String> {
+    let existing: Vec<&str> = paths
+        .iter()
+        .filter(|p| root.join(p).is_file())
+        .map(String::as_str)
+        .collect();
+    let mut ids = Vec::new();
+    if !existing.is_empty() {
+        let mut args = vec!["hash-object", "--"];
+        args.extend(&existing);
+        ids = git(root, &args)?.lines().map(str::to_string).collect();
+    }
+    if ids.len() != existing.len() {
+        return Err("`git hash-object` returned an unexpected result".into());
+    }
+    let mut ids = existing.into_iter().zip(ids);
+    let mut next = ids.next();
+    Ok(paths
+        .iter()
+        .map(|p| match &next {
+            Some((path, id)) if *path == p => {
+                let short = id.chars().take(FINGERPRINT_LEN).collect();
+                next = ids.next();
+                (p.clone(), short)
+            }
+            _ => (p.clone(), DELETED.to_string()),
+        })
+        .collect())
+}
+
+/// Hex digits kept from a blob id; plenty to tell versions of a file apart.
+const FINGERPRINT_LEN: usize = 12;
+/// The fingerprint of a path that no longer exists.
+pub const DELETED: &str = "deleted";
+
 /// Run `git -C <root> <args>`; stdout on success, a reason otherwise.
 fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     let dir = if root.as_os_str().is_empty() {

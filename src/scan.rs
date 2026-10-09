@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::Error;
+use crate::fmt;
 use crate::md;
 use crate::output::{self, Format, Report};
 
@@ -32,7 +33,8 @@ pub fn run(root: &Path, format: Format) -> Result<(), Error> {
         open: 0,
         resolved: 0,
     };
-    for path in collect_spec_files(&specs_dir)? {
+    // Spec files plus open task files (remarks gate `advance` there too).
+    for path in fmt::default_files(root)? {
         let remarks = parse_remarks(&fs::read_to_string(&path)?);
         for r in &remarks {
             if r.resolved {
@@ -116,19 +118,6 @@ pub fn parse_remarks(content: &str) -> Vec<Remark> {
     }
 
     remarks
-}
-
-fn collect_spec_files(dir: &Path) -> Result<Vec<PathBuf>, Error> {
-    let mut files = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_file() && path.extension().is_some_and(|e| e == "md") {
-            files.push(path);
-        }
-    }
-    files.sort();
-    Ok(files)
 }
 
 #[cfg(test)]

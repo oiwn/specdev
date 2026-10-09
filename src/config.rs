@@ -21,7 +21,7 @@ optional_sections = ["Summary", "Manual checks", "Context", "Findings", "Review"
 extra_fields = []
 
 [pipeline]
-# Entries into the `fix` stage before a task is blocked.
+# Failed verifies (verify → fix) before a task is blocked; revisions don't count.
 max_attempts = 3
 
 [acceptance]

@@ -4,7 +4,7 @@
 
 use crate::diag::Diagnostic;
 
-use super::{LogEvent, Position, Stage, Status, Task};
+use super::{Fix, LogEvent, Position, Stage, Status, Task};
 
 /// Whether `advance` may move a task from `from` to `to`. Blocking is not an
 /// advance: it is the `Blocked` event, legal from any open status.
@@ -71,6 +71,25 @@ pub fn next(from: Position) -> Option<Position> {
         status: to.0,
         stage: to.1,
     })
+}
+
+/// The steps from `from` to a later `to` along the happy path (`next`
+/// repeated), `to` included; `None` when `to` isn't ahead. Never starts from
+/// draft: approving the draft and its scope is the user's call, one step.
+pub fn path(from: Position, to: Position) -> Option<Vec<Position>> {
+    if from.status == Status::Draft {
+        return None;
+    }
+    let mut steps = Vec::new();
+    let mut at = from;
+    while let Some(step) = next(at) {
+        steps.push(step);
+        if step == to {
+            return Some(steps);
+        }
+        at = step;
+    }
+    None
 }
 
 /// Whether a task in `status` may be blocked.
@@ -152,7 +171,7 @@ pub fn replay(task: &Task) -> (Replayed, Vec<Diagnostic>) {
                 "log-created",
                 format!("`{entry}`: `created` may only be the first entry"),
             ),
-            LogEvent::Advance { from, to, attempts } => {
+            LogEvent::Advance { from, to, fix } => {
                 if *from != state.position {
                     error(
                         "log-transition",
@@ -168,19 +187,38 @@ pub fn replay(task: &Task) -> (Replayed, Vec<Diagnostic>) {
                     );
                 }
                 let entering_fix = to.stage == Some(Stage::Fix);
-                if entering_fix && *attempts != Some(state.attempts + 1) {
-                    error(
+                let next = state.attempts + 1;
+                // A failed verify is a repair attempt. Review notes and user
+                // feedback are revisions; logs from before revisions existed
+                // count them as attempts, which stays valid.
+                match (entering_fix, fix) {
+                    (true, Some(Fix::Attempt(n))) if *n == next => {}
+                    (true, Some(Fix::Revision))
+                        if from.stage != Some(Stage::Verify) => {}
+                    (true, _) if from.stage == Some(Stage::Verify) => error(
                         "log-attempts",
                         format!(
-                            "`{entry}`: entering fix must record `(attempts {})`",
-                            state.attempts + 1
+                            "`{entry}`: a failed verify must record `(attempts {next})`"
                         ),
-                    );
-                } else if !entering_fix && attempts.is_some() {
-                    error(
+                    ),
+                    (true, _) => error(
                         "log-attempts",
-                        format!("`{entry}`: only moves into fix record attempts"),
-                    );
+                        format!(
+                            "`{entry}`: entering fix must record `(revision)` or `(attempts {next})`"
+                        ),
+                    ),
+                    (false, Some(_)) => error(
+                        "log-attempts",
+                        format!(
+                            "`{entry}`: only moves into fix record attempts or revisions"
+                        ),
+                    ),
+                    (false, None) => {}
+                }
+                // Best effort: follow the recorded count even when it's
+                // wrong, so one bad entry doesn't cascade.
+                if let (true, Some(Fix::Attempt(n))) = (entering_fix, fix) {
+                    state.attempts = *n;
                 }
                 if to.status == Status::InProgress
                     && from.status == Status::Ready
@@ -190,9 +228,6 @@ pub fn replay(task: &Task) -> (Replayed, Vec<Diagnostic>) {
                         "log-scope",
                         format!("`{entry}`: started without an approved scope"),
                     );
-                }
-                if entering_fix {
-                    state.attempts = attempts.unwrap_or(state.attempts + 1);
                 }
                 if to.status == Status::Draft {
                     state.scope = None;
@@ -242,7 +277,18 @@ pub fn replay(task: &Task) -> (Replayed, Vec<Diagnostic>) {
                 };
                 state.blocked_reason = Some(reason.clone());
             }
-            LogEvent::Set { .. } => {}
+            LogEvent::Approved { .. } => {
+                if state.position.status != Status::Approval {
+                    error(
+                        "log-transition",
+                        format!(
+                            "`{entry}`: approval is recorded only in approval (task was `{}`)",
+                            state.position
+                        ),
+                    );
+                }
+            }
+            LogEvent::Set { .. } | LogEvent::Baseline(_) => {}
         }
     }
     (state, diags)
@@ -342,6 +388,39 @@ mod tests {
     }
 
     #[test]
+    fn forward_paths() {
+        let show = |ps: Option<Vec<Position>>| -> Option<Vec<String>> {
+            ps.map(|ps| ps.iter().map(ToString::to_string).collect())
+        };
+        assert_eq!(
+            show(path(pos("in-progress/implement"), pos("approval"))),
+            Some(vec![
+                "in-progress/verify".into(),
+                "in-progress/review".into(),
+                "approval".into()
+            ])
+        );
+        assert_eq!(
+            show(path(pos("ready"), pos("in-progress/verify"))),
+            Some(vec![
+                "in-progress/implement".into(),
+                "in-progress/verify".into()
+            ])
+        );
+        // Never backwards, never off the happy path, never out of draft.
+        assert_eq!(
+            path(pos("in-progress/review"), pos("in-progress/verify")),
+            None
+        );
+        assert_eq!(
+            path(pos("in-progress/implement"), pos("in-progress/fix")),
+            None
+        );
+        assert_eq!(path(pos("draft"), pos("in-progress/implement")), None);
+        assert_eq!(path(pos("approval"), pos("done")), None);
+    }
+
+    #[test]
     fn happy_path_replays_cleanly() {
         let t = task(
             "approval",
@@ -412,7 +491,40 @@ mod tests {
             ]
         );
         assert_eq!(state.position, pos("in-progress/fix"));
-        assert_eq!(state.attempts, 1);
+        assert_eq!(state.attempts, 0, "an unmarked move isn't counted");
+    }
+
+    #[test]
+    fn revisions_are_logged_but_not_counted() {
+        let start = [
+            "2026-10-03 created: x",
+            "2026-10-03 advance draft → ready",
+            "2026-10-03 scope approved: src/a.rs",
+            "2026-10-04 advance ready → in-progress/implement",
+            "2026-10-04 advance in-progress/implement → in-progress/verify",
+            "2026-10-04 advance in-progress/verify → in-progress/review",
+            "2026-10-04 advance in-progress/review → approval",
+        ];
+        let mut log = start.to_vec();
+        for _ in 0..4 {
+            log.extend([
+                "2026-10-05 advance approval → in-progress/fix (revision)",
+                "2026-10-05 advance in-progress/fix → in-progress/verify",
+                "2026-10-05 advance in-progress/verify → in-progress/review",
+                "2026-10-05 advance in-progress/review → approval",
+            ]);
+        }
+        let (state, diags) = replay(&task("approval", &log));
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(state.attempts, 0);
+
+        // A failed verify is a repair: it must be counted.
+        let mut log = start[..5].to_vec();
+        log.push(
+            "2026-10-05 advance in-progress/verify → in-progress/fix (revision)",
+        );
+        let (_, diags) = replay(&task("in-progress", &log));
+        assert_eq!(codes(&diags), ["log-attempts"]);
     }
 
     #[test]

@@ -636,8 +636,12 @@ fn task_lifecycle_through_commands() {
     let dir = tmp.path();
 
     let out = step(dir, &["task", "advance", "x"]);
-    assert!(out.contains("0001-x — draft → ready"), "got {out}");
-    assert!(out.contains("scope approved: src/a.rs"), "got {out}");
+    assert_eq!(out, "0001-x — draft → ready\n", "one line per move");
+    let content = fs::read_to_string(&file).unwrap();
+    assert!(
+        content.contains(" scope approved: src/a.rs\n"),
+        "got {content}"
+    );
     step(dir, &["task", "advance", "1"]);
     refused(
         dir,
@@ -653,12 +657,22 @@ fn task_lifecycle_through_commands() {
         &["task", "advance", "x"],
         "`## Acceptance` items unticked",
     );
-    let out = step(dir, &["task", "advance", "x", "--to", "fix"]);
-    assert!(out.contains("(attempts 1)"), "got {out}");
+    step(dir, &["task", "advance", "x", "--to", "fix"]);
     step(dir, &["task", "advance", "x"]);
     edit(&file, "- [ ] cargo test", "- [x] cargo test");
-    step(dir, &["task", "advance", "x"]);
-    step(dir, &["task", "advance", "x"]);
+    // One walk from verify to approval; each step's gate still applies.
+    refused(
+        dir,
+        &file,
+        &["task", "advance", "x", "--to", "approval"],
+        "stopped at `in-progress/review → approval`: `0001-x` needs a `## Review`",
+    );
+    edit(&file, "## Log", "## Review\n\nMatches the plan.\n\n## Log");
+    let out = step(dir, &["task", "advance", "x", "--to", "approval"]);
+    assert_eq!(
+        out,
+        "0001-x — in-progress/verify → approval (via in-progress/review)\n"
+    );
 
     let content = fs::read_to_string(&file).unwrap();
     assert!(content.contains("status: approval\n"), "got {content}");
@@ -774,7 +788,7 @@ fn state_commands_refuse_bad_changes() {
         dir,
         &y,
         &["task", "advance", "y"],
-        "`0001-x` is already active",
+        "`0001-x` is already in progress",
     );
 
     // A hand edit breaks the log; commands refuse until it's repaired.
@@ -798,15 +812,29 @@ fn attempts_cap_blocks_the_task() {
     }
     step(dir, &["task", "advance", "x", "--to", "fix"]);
     step(dir, &["task", "advance", "x"]);
+    // Review notes and user feedback are revisions: they never hit the cap.
+    edit(&file, "- [ ] cargo test", "- [x] cargo test");
+    for _ in 0..3 {
+        step(dir, &["task", "advance", "x"]);
+        step(dir, &["task", "advance", "x", "--to", "fix"]);
+        step(dir, &["task", "advance", "x"]);
+    }
+    let content = fs::read_to_string(&file).unwrap();
+    assert_eq!(
+        content.matches("in-progress/fix (revision)").count(),
+        3,
+        "got {content}"
+    );
+    // A second failed verify is a second repair: blocked.
     let out = step(dir, &["task", "advance", "x", "--to", "fix"]);
     assert!(out.contains("in-progress/verify → blocked"), "got {out}");
     assert!(
-        out.contains("Note: not moved to fix: attempts cap reached (1)"),
+        out.contains("Note: not moved to fix: repair attempts cap reached (1)"),
         "got {out}"
     );
     let content = fs::read_to_string(&file).unwrap();
     assert!(
-        content.contains("blocked_reason: attempts cap reached (1)\n"),
+        content.contains("blocked_reason: repair attempts cap reached (1)\n"),
         "got {content}"
     );
     assert!(content.contains("attempts: 1\n"), "got {content}");
@@ -956,23 +984,35 @@ fn scope_check_against_git_working_tree() {
 #[test]
 fn scope_check_before_the_first_commit() {
     // Without a commit every file is a change, `init`'s own files included.
-    let (tmp, _) = drafted();
+    // Those predate the task: its start baseline keeps them out of scope
+    // until they change again.
+    let (tmp, file) = drafted();
     let dir = tmp.path();
     git(dir, &["init", "-q"]);
     for _ in 0..2 {
         let (_, err, code) = run(dir, &["task", "advance", "x"]);
         assert_eq!(code, 0, "{err}");
     }
+    let content = fs::read_to_string(&file).unwrap();
+    assert!(content.contains(" baseline: AGENTS.md@"), "got {content}");
     fs::write(dir.join("src/a.rs"), "// a\n").unwrap();
     fs::write(dir.join("src/z.rs"), "// z\n").unwrap();
     git(dir, &["add", "src/a.rs"]);
     let (out, _, code) = run(dir, &["check"]);
     assert_eq!(code, 1, "got {out}");
     assert!(out.contains("src/z.rs: error[out-of-scope]"), "got {out}");
-    assert!(out.contains("AGENTS.md: error[out-of-scope]"), "got {out}");
+    assert!(!out.contains("AGENTS.md"), "baseline file: {out}");
     assert!(!out.contains("src/a.rs:"), "got {out}");
     assert!(!out.contains("specs/"), "got {out}");
     assert!(!out.contains("scope-skipped"), "got {out}");
+
+    fs::write(dir.join("AGENTS.md"), "# AGENTS.md\n\nedited by the task\n")
+        .unwrap();
+    // `task done` writes CHANGELOG.md: specdev's file, never out of scope.
+    fs::write(dir.join("CHANGELOG.md"), "# Changelog\n\n## new entry\n").unwrap();
+    let (out, _, _) = run(dir, &["check"]);
+    assert!(out.contains("AGENTS.md: error[out-of-scope]"), "got {out}");
+    assert!(!out.contains("CHANGELOG.md: error"), "got {out}");
 }
 
 #[test]
@@ -1024,7 +1064,7 @@ fn ready_to_go(dir: &Path, slug: &str) -> std::path::PathBuf {
     edit(
         &file,
         "## Acceptance\n\n",
-        "## Acceptance\n\n- [x] cargo test\n\n",
+        "## Acceptance\n\n- [x] cargo test\n\n## Review\n\nMatches the plan.\n\n",
     );
     step(dir, &["task", "advance", slug]);
     file
@@ -1035,6 +1075,131 @@ fn to_approval(dir: &Path, slug: &str) {
     for _ in 0..4 {
         step(dir, &["task", "advance", slug]);
     }
+}
+
+#[test]
+fn advance_walks_forward_checking_every_gate() {
+    let tmp = init_tmp();
+    let dir = tmp.path();
+    fs::create_dir(dir.join("src")).unwrap();
+
+    // Never out of draft: approving the draft is the user's step.
+    step(dir, &["task", "new", "d"]);
+    let d = dir.join("specs/tasks/0001-d.md");
+    refused(
+        dir,
+        &d,
+        &["task", "advance", "d", "--to", "implement"],
+        "can't move from `draft` to `in-progress/implement`",
+    );
+
+    // A failing gate on the way refuses the whole walk.
+    let x = ready_to_go(dir, "x");
+    edit(&x, "- [x] cargo test", "- [ ] cargo test");
+    refused(
+        dir,
+        &x,
+        &["task", "advance", "x", "--to", "approval"],
+        "stopped at `in-progress/verify → in-progress/review`: `0002-x`: 1 of 1 `## Acceptance` items unticked",
+    );
+
+    // All gates pass: ready to approval in one call, one log line per step.
+    edit(&x, "- [ ] cargo test", "- [x] cargo test");
+    let out = step(dir, &["task", "advance", "x", "--to", "approval"]);
+    assert_eq!(
+        out,
+        "0002-x — ready → approval (via in-progress/implement, in-progress/verify, in-progress/review)\n"
+    );
+    let content = fs::read_to_string(&x).unwrap();
+    for line in [
+        " advance ready → in-progress/implement\n",
+        " advance in-progress/implement → in-progress/verify\n",
+        " advance in-progress/verify → in-progress/review\n",
+        " advance in-progress/review → approval\n",
+    ] {
+        assert!(content.contains(line), "missing {line:?} in {content}");
+    }
+}
+
+#[test]
+fn task_done_closes_a_batch_all_or_nothing() {
+    let tmp = init_tmp();
+    let dir = tmp.path();
+    fs::create_dir(dir.join("src")).unwrap();
+    let changelog = dir.join("CHANGELOG.md");
+    let x = ready_to_go(dir, "x");
+    let y = ready_to_go(dir, "y");
+    let z = ready_to_go(dir, "z");
+    // Tasks waiting in approval don't hold the slot: all three get there.
+    for slug in ["x", "y", "z"] {
+        to_approval(dir, slug);
+    }
+    edit(&x, "## Log", "## Summary\n\nShips x.\n\n## Log");
+    edit(
+        &y,
+        "## Log",
+        "## Manual checks\n\n- [ ] look at it\n\n## Summary\n\nShips y.\n\n## Log",
+    );
+
+    // One blocked task stops the batch; every blocker is reported.
+    let before = fs::read_to_string(&changelog).unwrap();
+    let (_, err, code) = run(dir, &["task", "done", "x", "y", "z"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("nothing closed"), "got {err}");
+    assert!(
+        err.contains("`0002-y`: 1 of 1 `## Manual checks`"),
+        "got {err}"
+    );
+    assert!(
+        err.contains("`0003-z` needs a one-line `## Summary`"),
+        "got {err}"
+    );
+    assert!(x.exists() && y.exists() && z.exists());
+    assert_eq!(fs::read_to_string(&changelog).unwrap(), before);
+
+    edit(
+        &y,
+        "- [ ] look at it",
+        "- [x] look at it — waived by user: \"skip\"",
+    );
+    edit(&z, "## Log", "## Summary\n\nShips z.\n\n## Log");
+    let (out, _, code) = run(dir, &["task", "done", "x", "y", "--dry-run"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("Dry run: nothing written"), "got {out}");
+    assert!(x.exists() && y.exists());
+    assert_eq!(fs::read_to_string(&changelog).unwrap(), before);
+
+    let out = step(
+        dir,
+        &["task", "done", "x", "y", "--approval", "both look good"],
+    );
+    assert!(out.contains("0002-y — approval → done"), "got {out}");
+    let archived =
+        fs::read_to_string(dir.join("specs/tasks/done/0001-x.md")).unwrap();
+    assert!(
+        archived.contains(" approved: both look good\n- ")
+            && archived.ends_with(" advance approval → done\n"),
+        "got {archived}"
+    );
+
+    // A retry after a partial close (changelog written, file not moved)
+    // doesn't duplicate the entry.
+    let (with_z, _, _) = run(dir, &["task", "done", "z", "--dry-run"]);
+    assert!(with_z.contains("0003-z"), "got {with_z}");
+    let log = fs::read_to_string(&changelog).unwrap();
+    fs::write(
+        &changelog,
+        log.replacen(
+            "\n## ",
+            "\n## 2026-10-08 — z\n\n- Ships z.\n- Task `0003-z`\n\n## ",
+            1,
+        ),
+    )
+    .unwrap();
+    step(dir, &["task", "done", "z"]);
+    let log = fs::read_to_string(&changelog).unwrap();
+    assert_eq!(log.matches("- Task `0003-z`").count(), 1, "got {log}");
+    assert_eq!(log.matches("- Task `0001-x`").count(), 1, "got {log}");
 }
 
 #[test]
@@ -1076,12 +1241,14 @@ fn task_done_archives_and_writes_changelog() {
         "1 of 1 `## Manual checks` items unticked",
     );
     edit(&x, "- [ ] try it", "- [x] try it");
-    // y can't start while x is active.
+    // x waits for acceptance without holding the slot: y may start, and then
+    // x can't go back to in-progress while y is there.
+    step(dir, &["task", "advance", "y"]);
     refused(
         dir,
-        &y,
-        &["task", "advance", "y"],
-        "`0001-x` is already active",
+        &x,
+        &["task", "advance", "x", "--to", "fix"],
+        "`0002-y` is already in progress",
     );
 
     fs::write(
@@ -1090,10 +1257,9 @@ fn task_done_archives_and_writes_changelog() {
     )
     .unwrap();
     let out = step(dir, &["task", "done", "x"]);
-    assert!(out.contains("0001-x — approval → done"), "got {out}");
-    assert!(
-        out.contains("Note: Moved to specs/tasks/done/0001-x.md"),
-        "got {out}"
+    assert_eq!(
+        out,
+        "0001-x — approval → done (specs/tasks/done/0001-x.md)\nUpdated CHANGELOG.md\n"
     );
 
     let archived = dir.join("specs/tasks/done/0001-x.md");
@@ -1127,7 +1293,9 @@ fn task_done_archives_and_writes_changelog() {
     assert!(err.contains("archived in done/"), "got {err}");
 
     // The queue moves on; the newer entry goes above the older one.
-    to_approval(dir, "y");
+    for _ in 0..3 {
+        step(dir, &["task", "advance", "y"]);
+    }
     edit(&y, "## Log", "## Summary\n\n- Ships y.\n\n## Log");
     step(dir, &["task", "done", "y"]);
     let log = fs::read_to_string(&changelog).unwrap();
@@ -1219,6 +1387,44 @@ fn quality_gate_for_spec_files() {
     for col in ["lines", "code", "tbl"] {
         assert!(out.contains(col), "stats header missing {col}: {out}");
     }
+
+    // Committed, the CHANGELOG warning is old news: one summary line, unless
+    // --verbose. Touch the file and it's listed again.
+    git(dir, &["init", "-q"]);
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", "baseline"]);
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(!out.contains("warning[quality-lines]"), "got {out}");
+    assert!(
+        out.contains("1 existing size warning in unchanged files"),
+        "got {out}"
+    );
+    let (out, _, _) = run(dir, &["check", "--verbose"]);
+    assert!(out.contains("warning[quality-lines]"), "got {out}");
+    fs::write(
+        &changelog,
+        format!("{}- new\n", fs::read_to_string(&changelog).unwrap()),
+    )
+    .unwrap();
+    let (out, _, _) = run(dir, &["check"]);
+    assert!(out.contains("warning[quality-lines]"), "got {out}");
+}
+
+#[test]
+fn scan_and_stats_include_open_task_files() {
+    let tmp = init_tmp();
+    let dir = tmp.path();
+    step(dir, &["task", "new", "x"]);
+    let task = dir.join("specs/tasks/0001-x.md");
+    edit(&task, "## Plan\n\n", "## Plan\n\n^^^ which locale?\n\n");
+    let (out, _, code) = run(dir, &["scan"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("tasks/0001-x.md\n"), "got {out}");
+    assert!(out.contains("[    open]  which locale?"), "got {out}");
+    let (out, _, _) = run(dir, &["list", "--stats"]);
+    assert!(out.contains("tasks/0001-x.md "), "got {out}");
+    assert!(!out.contains("_index"), "got {out}");
 }
 
 #[test]

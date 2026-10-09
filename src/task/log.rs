@@ -26,7 +26,8 @@ pub enum LogEvent {
     Advance {
         from: Position,
         to: Position,
-        attempts: Option<u32>,
+        /// Moves into fix say why: a repair attempt or a revision.
+        fix: Option<Fix>,
     },
     ScopeApproved(Vec<String>),
     ScopeAdd {
@@ -39,10 +40,28 @@ pub enum LogEvent {
     Blocked {
         reason: String,
     },
+    /// The user's acceptance, in their words, recorded by `task done`.
+    Approved {
+        quote: String,
+    },
+    /// Files outside the scope that were already changed when the task
+    /// (re)entered in-progress, with their content fingerprint then.
+    Baseline(Vec<(String, String)>),
     Set {
         field: String,
         value: String,
     },
+}
+
+/// Why a task entered fix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fix {
+    /// Repairing a failed verify; the running count, capped by
+    /// `max_attempts`. Logged as `(attempts n)`.
+    Attempt(u32),
+    /// Review notes or user feedback: new or changed work, not a failure.
+    /// Logged as `(revision)`; doesn't count toward the cap.
+    Revision,
 }
 
 impl fmt::Display for LogEntry {
@@ -55,12 +74,13 @@ impl fmt::Display for LogEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Created { title } => write!(f, "created: {title}"),
-            Self::Advance { from, to, attempts } => {
+            Self::Advance { from, to, fix } => {
                 write!(f, "advance {from} → {to}")?;
-                if let Some(n) = attempts {
-                    write!(f, " (attempts {n})")?;
+                match fix {
+                    Some(Fix::Attempt(n)) => write!(f, " (attempts {n})"),
+                    Some(Fix::Revision) => write!(f, " (revision)"),
+                    None => Ok(()),
                 }
-                Ok(())
             }
             Self::ScopeApproved(paths) if paths.is_empty() => {
                 write!(f, "scope approved:")
@@ -73,6 +93,12 @@ impl fmt::Display for LogEvent {
             }
             Self::ScopeRemove { path } => write!(f, "scope rm {path}"),
             Self::Blocked { reason } => write!(f, "blocked: {reason}"),
+            Self::Approved { quote } => write!(f, "approved: {quote}"),
+            Self::Baseline(files) => {
+                let files: Vec<String> =
+                    files.iter().map(|(p, id)| format!("{p}@{id}")).collect();
+                write!(f, "baseline: {}", files.join(", "))
+            }
             Self::Set { field, value } if value.is_empty() => {
                 write!(f, "set {field} {EMPTY}")
             }
@@ -108,24 +134,29 @@ impl FromStr for LogEvent {
             });
         }
         if let Some(rest) = s.strip_prefix("advance ") {
-            let (moves, attempts) = match rest
-                .strip_suffix(')')
-                .and_then(|r| r.rsplit_once(" (attempts "))
+            let (moves, fix) = if let Some(moves) = rest.strip_suffix(" (revision)")
             {
-                Some((moves, n)) => {
-                    let n = n
-                        .parse()
-                        .map_err(|_| format!("`{s}`: invalid attempts `{n}`"))?;
-                    (moves, Some(n))
+                (moves, Some(Fix::Revision))
+            } else {
+                match rest
+                    .strip_suffix(')')
+                    .and_then(|r| r.rsplit_once(" (attempts "))
+                {
+                    Some((moves, n)) => {
+                        let n = n.parse().map_err(|_| {
+                            format!("`{s}`: invalid attempts `{n}`")
+                        })?;
+                        (moves, Some(Fix::Attempt(n)))
+                    }
+                    None => (rest, None),
                 }
-                None => (rest, None),
             };
             let (from, to) =
                 moves.split_once(" → ").ok_or_else(|| missing("` → `"))?;
             return Ok(Self::Advance {
                 from: from.parse()?,
                 to: to.parse()?,
-                attempts,
+                fix,
             });
         }
         if let Some(rest) = s.strip_prefix("scope approved:") {
@@ -154,6 +185,22 @@ impl FromStr for LogEvent {
         if let Some(reason) = s.strip_prefix("blocked: ") {
             return Ok(Self::Blocked {
                 reason: reason.to_string(),
+            });
+        }
+        if let Some(rest) = s.strip_prefix("baseline: ") {
+            let files = rest
+                .split(", ")
+                .map(|f| {
+                    f.rsplit_once('@')
+                        .map(|(p, id)| (p.to_string(), id.to_string()))
+                        .ok_or_else(|| missing("`@<fingerprint>`"))
+                })
+                .collect::<Result<_, _>>()?;
+            return Ok(Self::Baseline(files));
+        }
+        if let Some(quote) = s.strip_prefix("approved: ") {
+            return Ok(Self::Approved {
+                quote: quote.to_string(),
             });
         }
         if let Some(rest) = s.strip_prefix("set ") {
@@ -212,12 +259,17 @@ mod tests {
             LogEvent::Advance {
                 from: pos(Status::Draft, None),
                 to: pos(Status::Ready, None),
-                attempts: None,
+                fix: None,
             },
             LogEvent::Advance {
                 from: pos(Status::InProgress, Some(Stage::Verify)),
                 to: pos(Status::InProgress, Some(Stage::Fix)),
-                attempts: Some(1),
+                fix: Some(Fix::Attempt(1)),
+            },
+            LogEvent::Advance {
+                from: pos(Status::Approval, None),
+                to: pos(Status::InProgress, Some(Stage::Fix)),
+                fix: Some(Fix::Revision),
             },
             LogEvent::ScopeApproved(vec![
                 "src/status.rs".to_string(),
@@ -234,6 +286,13 @@ mod tests {
             LogEvent::Blocked {
                 reason: "plan was wrong".to_string(),
             },
+            LogEvent::Approved {
+                quote: "\"looks good\"".to_string(),
+            },
+            LogEvent::Baseline(vec![
+                ("src/old.rs".to_string(), "0123456789ab".to_string()),
+                ("dir/a@b.rs".to_string(), "deleted".to_string()),
+            ]),
             LogEvent::Set {
                 field: "source".to_string(),
                 value: "gh issue 12".to_string(),
