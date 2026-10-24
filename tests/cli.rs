@@ -389,7 +389,12 @@ fn skill_install_local_and_global() {
     let project = TempDir::new().unwrap();
     let env = [("HOME", home.path())];
     let version = env!("CARGO_PKG_VERSION");
-    let files = ["SKILL.md", "references/examples.md", "specdev.meta"];
+    let files = [
+        "SKILL.md",
+        "references/examples.md",
+        "references/config.md",
+        "specdev.meta",
+    ];
 
     let (_, err, code) =
         run_env(project.path(), &["skill", "install", "--local"], &env);
@@ -710,6 +715,108 @@ fn draft_approval_gate() {
     let content = fs::read_to_string(&file).unwrap();
     assert!(content.contains("draft approved\n"), "got {content}");
     step(dir, &["task", "advance", "x"]);
+}
+
+#[test]
+fn task_grades_shape_the_quality_gate() {
+    let tmp = init_tmp();
+    let dir = tmp.path();
+    // A tight default grade and a roomy named one.
+    fs::write(
+        dir.join("specdev.toml"),
+        "[quality.task]\nmax_lines = 10\n\n[quality.grade.big]\nmax_lines = 30\n",
+    )
+    .unwrap();
+    step(dir, &["task", "new", "manual"]);
+    let file = dir.join("specs/tasks/0001-manual.md");
+    edit(
+        &file,
+        "## Plan\n\n",
+        "## Plan\n\n- [ ] a step\n\n## Context\n\nA working manual that legitimately runs long.\n",
+    );
+
+    // Over the default grade: a warning naming the remedies.
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "warning: {out}");
+    assert!(out.contains("warning[quality-lines]"), "got {out}");
+    assert!(
+        out.contains("raise the grade (`specdev task set <id> grade <name>`)"),
+        "got {out}"
+    );
+
+    // Unknown grades are refused by `set` and flagged by `check` when
+    // hand-edited into the frontmatter.
+    refused(
+        dir,
+        &file,
+        &["task", "set", "manual", "grade", "enormous"],
+        "unknown grade `enormous`",
+    );
+    edit(&file, "status: draft", "status: draft\ngrade: enormous");
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 1, "got {out}");
+    assert!(
+        out.contains("error[grade]: unknown grade `enormous`"),
+        "got {out}"
+    );
+    edit(&file, "grade: enormous\n", "");
+
+    // The grade raises the limits; clearing it restores them.
+    step(dir, &["task", "set", "manual", "grade", "big"]);
+    let content = fs::read_to_string(&file).unwrap();
+    assert!(content.contains("grade: big\n"), "got {content}");
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(!out.contains("quality-lines"), "got {out}");
+    step(dir, &["task", "set", "manual", "grade", ""]);
+    let (out, _, _) = run(dir, &["check"]);
+    assert!(out.contains("quality-lines"), "cleared: {out}");
+}
+
+#[test]
+fn skill_stale_warns_from_check() {
+    let tmp = init_tmp();
+    let dir = tmp.path();
+
+    // No local install: nothing to say.
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(!out.contains("skill-stale"), "got {out}");
+
+    // Fresh install: still silent.
+    let (_, err, code) = run(dir, &["skill", "install", "--local"]);
+    assert_eq!(code, 0, "{err}");
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(!out.contains("skill-stale"), "got {out}");
+
+    // Drift = content differs; an old stamp explains it as stale. The
+    // warning is a warning, points at the installed file, names the remedy.
+    let meta = dir.join(".agents/skills/specdev/specdev.meta");
+    fs::write(&meta, "specdev_version=0.0.1\n").unwrap();
+    let skill = dir.join(".agents/skills/specdev/SKILL.md");
+    let installed = fs::read_to_string(&skill).unwrap();
+    fs::write(&skill, format!("{installed}\nhand-edited\n")).unwrap();
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "warning only: {out}");
+    assert!(
+        out.contains("warning[skill-stale]: local skill file is stale"),
+        "got {out}"
+    );
+    assert!(out.contains("specdev skill install --local"), "got {out}");
+
+    // Status carries the same warning (filename + message, no code there).
+    let (out, _, _) = run(dir, &["status"]);
+    assert!(
+        out.contains("SKILL.md: local skill file is stale"),
+        "got {out}"
+    );
+
+    // The remedy clears it.
+    run(dir, &["skill", "install", "--local"]);
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(!out.contains("skill-stale"), "got {out}");
 }
 
 #[test]

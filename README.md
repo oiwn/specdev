@@ -55,13 +55,13 @@ The skill installs to `~/.agents/skills/specdev/SKILL.md`, where any [Agent Skil
 ## Two ways to track work
 
 - **`ctx.md`** — the working context. Design work and big, fuzzy work run here directly, with a checkbox plan, through the ideas → roadmap → ctx → changelog loop. When a task file is active, `ctx.md` just points at it.
-- **Task files** (`specs/tasks/<id>.md`) — one well-defined piece of work, sized to land as one commit. specdev owns its frontmatter and `## Log`; the agent and the human own the prose. It moves through a fixed pipeline, one task in progress at a time.
+- **Task files** (`specs/tasks/<id>.md`) — one well-defined piece of work, sized to land as one commit. specdev owns its frontmatter and `## Log`; the agent and the human own the prose. It moves through a fixed pipeline, one task in progress at a time. Tasks are explicit by default: the skill creates one only when you ask, and small fixes are direct edits (`[task] explicit_only = false` restores a task per change).
 
 ## The task pipeline
 
 Happy path: draft → ready → implement → verify → review → approval → done. Failures loop through fix.
 
-1. **draft** — `specdev task new <slug>`; the agent declares `scope` and writes Plan and Acceptance; the human reviews with `^^^` remarks. Approved → `specdev task advance` → ready (records the approved scope; refused while remarks are open).
+1. **draft** — `specdev task new <slug>`; the agent declares `scope` and writes Plan and Acceptance; the human reviews with `^^^` remarks. The human's approval is recorded with `specdev task approve <id> --note "<their words>"`, then `specdev task advance` → ready (refused while remarks are open or without the recorded approval; records the approved scope).
 2. **ready** — queued; `advance` starts it when no other task is in progress.
 3. **implement** — code inside `scope` only; new files are declared first with `specdev task scope <id> add <path>... --reason "…"`. Files already dirty when the task starts are its baseline and don't count against scope until edited again. All Plan boxes ticked → verify.
 4. **verify** — the agent runs the Acceptance commands and ticks what passed (specdev runs nothing itself). All ticked → review; failures → `--to fix` (a repair attempt).
@@ -89,10 +89,11 @@ All commands run from the project root. The global `--format json|toon` flag giv
 - `specdev task new <slug>` — create a draft task file (next free number) with the sections from `specdev.toml`.
 - `specdev task list` — open tasks in queue order: active, ready, draft, blocked.
 - `specdev task show <id>` — state, scope, plan progress, log, and the next step.
-- `specdev task advance <id> [--to <target>]` — move to the next stage, or to `draft`, `ready`, `approval`, or a stage (`implement`, `verify`, `review`, `fix`). A later stage on the happy path is walked to step by step (never out of draft); a failing gate stops the walk and writes nothing. Gates: no open `^^^` for draft → ready, Plan ticked for implement → verify, Acceptance ticked for verify → review, `## Review` written for review → approval, one task in progress. Entering in-progress records a baseline of files already changed outside the scope.
+- `specdev task advance <id> [--to <target>]` — move to the next stage, or to `draft`, `ready`, `approval`, or a stage (`implement`, `verify`, `review`, `fix`). A later stage on the happy path is walked to step by step (never out of draft); a failing gate stops the walk and writes nothing. Gates: a recorded `task approve` and no open `^^^` for draft → ready, Plan ticked for implement → verify, Acceptance ticked for verify → review, `## Review` written for review → approval, one task in progress. Entering in-progress records a baseline of files already changed outside the scope.
+- `specdev task approve <id> [--note "<quote>"]` — record the human's approval of a draft (their words); required before draft → ready.
 - `specdev task block <id> --reason "…"` — block a task on a real obstacle.
-- `specdev task set <id> <field> <value>` — plain fields: `source`, `depends` (comma-separated ids), and extra fields from `specdev.toml`; `""` clears.
-- `specdev task scope <id> add <path>... --reason "…"` / `specdev task scope <id> rm <path>` — change the scope; every change is logged.
+- `specdev task set <id> <field> <value>` — plain fields: `source`, `grade`, `depends` (comma-separated ids), and extra fields from `specdev.toml`; `""` clears.
+- `specdev task scope <id> add <path>... --reason "…"` / `specdev task scope <id> rm <path> [--reason "…"]` — change the scope; every change is logged.
 - `specdev task done <id>... [--approval "<quote>"] [--dry-run]` — close accepted tasks (each needs `## Summary` and every `## Manual checks` box resolved). All are checked first; one blocker closes nothing. A retry never duplicates a CHANGELOG entry.
 - `specdev task index` — regenerate `specs/tasks/_index.md`.
 
@@ -117,9 +118,10 @@ Text output is one line per move; `--format json` adds the log lines and the reg
   - task contract: required sections, fields, ids, `depends`;
   - log consistency: each task's frontmatter must match what its own `## Log` replays to, so hand edits are caught without git;
   - one task in progress; `_index.md` up to date;
-  - scope: files changed in git outside the in-progress task's `scope`, or with none in progress, outside every approval task's scope (anything under `specs/`, `[scope] always_allowed`, and unchanged baseline files are exempt);
-  - quality gate: size and plan limits per file kind, optional no-tables rule;
-  - formatting, and the `ctx.md` warnings from `status`.
+  - scope: files changed in git outside the in-progress task's `scope`, or with none in progress, outside every approval task's scope (anything under `specs/`, `[scope] always_allowed`, and unchanged baseline files are exempt). Working-tree violations are errors, unless `[task] explicit_only = true` (the default) — then warnings, so a small direct fix doesn't force a task into existence; `check --staged` always warns. When the file is in another open task's scope, the message names it;
+  - quality gate: size and plan limits per file kind — tasks measured against their declared `grade` (`[quality.grade.<name>]`; default `tiny`/`huge` ship) — plus the optional no-tables rule;
+  - formatting, the `ctx.md` header invariant, and the `ctx.md` warnings from `status`;
+  - a drifted local skill install warns `skill-stale` (stale version stamp, modified, or missing files in `.agents/skills/specdev/` — fix with `specdev skill install --local`).
 - Errors print first. Size warnings for files without uncommitted changes collapse into one line; `--verbose` lists them.
 - `specdev check --staged` — the same, checking only staged files against the scope, as warnings; meant for a pre-commit hook.
 
@@ -130,7 +132,7 @@ specs/tasks/_index.md: error[index-stale]: out of date; run `specdev task index`
 2 errors, 0 warnings
 ```
 
-- `specdev fmt [<file>...]` — normalize Markdown in `specs/` and open task files: unwrap hard-wrapped paragraphs into soft wraps, `-` bullets, blank lines around headings. Code blocks, tables, links, and `^^^`/`&&&` lines stay as written.
+- `specdev fmt [<file>...] [--check]` — normalize Markdown in `specs/` and open task files: unwrap hard-wrapped paragraphs into soft wraps, `-` bullets, blank lines around headings. Code blocks, tables, links, and `^^^`/`&&&` lines stay as written. Explicit paths must be inside that set — `fmt` never touches unrelated files. `--check` reports without writing and exits 1 when something needs formatting (CI/hooks).
 
 ### Inspecting
 
@@ -162,6 +164,7 @@ Warnings:
 required_sections = ["Plan", "Acceptance"]   # `task new` creates them; `check` requires them
 optional_sections = ["Summary", "Manual checks", "Context", "Findings", "Review", "Spec updates"]
 extra_fields = []                            # project-specific frontmatter fields for `task set`
+explicit_only = true                         # tasks only when the user asks; out-of-scope warns instead of erroring
 
 [pipeline]
 max_attempts = 3                             # failed verifies before the task is blocked; revisions don't count
@@ -176,11 +179,23 @@ always_allowed = []                          # globs never counted against a tas
 errors = false                               # true: quality violations fail `check`
 forbid_tables = false                        # flag Markdown tables and ASCII diagrams
 
-[quality.task]                               # omitted keys keep their defaults; 0 turns a limit off
+[quality.task]                               # the default grade; omitted keys keep their defaults; 0 turns a limit off
 max_lines = 150
 max_words = 1000                             # catches soft-wrapped files whose line count stays low
 max_plan_steps = 8
 max_scope = 6
+
+[quality.grade.tiny]                         # size grades: `specdev task set <id> grade <name>`
+max_lines = 80
+max_words = 500
+max_plan_steps = 5
+max_scope = 3
+
+[quality.grade.huge]                         # for user-mandated umbrella/working-manual tasks
+max_lines = 300
+max_words = 2500
+max_plan_steps = 12
+max_scope = 12
 
 [quality.ctx]
 max_lines = 120
@@ -239,7 +254,7 @@ The bundled skill (`skills/SKILL.md`) follows the [Agent Skills specification](h
 4. Declare scope before touching files, run the Acceptance commands themselves, and stop at approval.
 5. Address `^^^` remarks before writing code, and compress them only on request.
 
-`references/examples.md` holds before/after examples, loaded on demand. After upgrading specdev, re-run `specdev skill install` (`specdev skill check` tells you when it's stale).
+The skill's `references/` directory holds on-demand material: `examples.md` (before/after editing examples) and `config.md` (the full `specdev.toml` reference — read it before changing the project's config). After upgrading specdev, re-run `specdev skill install` (`specdev skill check` tells you when it's stale).
 
 ## License
 

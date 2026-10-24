@@ -523,6 +523,16 @@ pub fn set(
                 task.front.source = (!value.is_empty()).then(|| value.to_string());
                 value.to_string()
             }
+            "grade" => {
+                if !value.is_empty() && !config.quality.grade.contains_key(value) {
+                    return Err(usage(format!(
+                        "unknown grade `{value}` (configured: {}); add a [quality.grade.{value}] table first",
+                        config.quality.grade_names().join(", ")
+                    )));
+                }
+                task.front.grade = (!value.is_empty()).then(|| value.to_string());
+                value.to_string()
+            }
             "depends" => {
                 let mut ids: Vec<TaskId> = Vec::new();
                 for q in value.split(',').map(str::trim).filter(|q| !q.is_empty()) {

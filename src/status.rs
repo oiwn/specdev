@@ -10,6 +10,7 @@ use crate::diag::Diagnostic;
 use crate::md;
 use crate::output::{self, Format, Report};
 use crate::scan;
+use crate::skill;
 
 const CORE_FILES: [&str; 4] = ["overview.md", "ctx.md", "roadmap.md", "ideas.md"];
 
@@ -80,7 +81,8 @@ pub fn run(root: &Path, format: Format) -> Result<(), Error> {
 }
 
 /// Spec-level warnings shared by `status` and `check`: `ctx.md` content that
-/// belongs elsewhere, a finished-looking `ctx.md`, missing root files.
+/// belongs elsewhere, a finished-looking `ctx.md`, missing root files, and a
+/// drifted local skill install.
 pub fn spec_diagnostics(root: &Path) -> Result<Vec<Diagnostic>, Error> {
     let ctx_path = root.join("specs").join("ctx.md");
     let mut diags = if ctx_path.exists() {
@@ -89,6 +91,7 @@ pub fn spec_diagnostics(root: &Path) -> Result<Vec<Diagnostic>, Error> {
         Vec::new()
     };
     diags.extend(root_file_diagnostics(root));
+    diags.extend(skill::local_drift(root));
     Ok(diags)
 }
 

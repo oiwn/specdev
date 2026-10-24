@@ -52,6 +52,7 @@ pub fn new(root: &Path, slug: &str, format: Format) -> Result<(), Error> {
             scope: Vec::new(),
             created: today,
             source: None,
+            grade: None,
             depends: Vec::new(),
             attempts: 0,
             blocked_reason: None,

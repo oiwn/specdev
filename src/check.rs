@@ -212,6 +212,18 @@ fn check_task(
             error("depends", format!("depends on unknown task `{dep}`"));
         }
     }
+    if let Some(grade) = &front.grade
+        && !config.quality.grade.contains_key(grade)
+    {
+        error(
+            "grade",
+            format!(
+                "unknown grade `{grade}` (configured: {}); set one with `specdev task set {} grade <name>`",
+                config.quality.grade_names().join(", "),
+                front.id
+            ),
+        );
+    }
 
     if !archived && front.status != Status::Done {
         diags.extend(completeness(task, &outline));
@@ -221,6 +233,7 @@ fn check_task(
             &task.render(),
             quality::Kind::Task,
             Some(front.scope.len()),
+            front.grade.as_deref(),
             config,
         ));
     }

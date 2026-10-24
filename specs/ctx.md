@@ -1,21 +1,9 @@
 # Current Task Context: 0.4.0 — trust + papercuts
-
 State: in progress
-
 ## Plan
-
-- [x] Task 0001: fmt hardening (#20.2, #21.6)
-- [x] Task 0002: ctx header invariant (#15)
-- [x] Task 0003: CHANGELOG placement (#20.4)
-- [x] Task 0004: scope ergonomics (#20.3, #20.6, #16)
-- [x] Task 0005: task approve (#17, #20.5)
-- [x] Task 0006: explicit-only task creation (#19)
-- [ ] Release 0.4.0: bump, CHANGELOG, skill reinstall, close #15–#17, #19, #20
-
+- [x] Tasks 0001–0007: the 0.4.0 batch — closed; release ready for the user's commit/merge
+- [ ] Task 0010: skill-stale warning in `check`/`status` — at approval, awaiting acceptance
 ## Context
-
-Tasks 0001–0006 accepted ("lots go!") and closed 2026-10-25; entries in CHANGELOG.md, files in specs/tasks/done/. Awaiting the user's commits; he commits himself. Task 0007 (release) is drafted and user-approved but on hold until he says go. Stale issues #3–#8 and #10 closed 2026-10-24.
-
+The user commits and merges the release PR himself. Task 0010 shipped the `skill-stale` warning: content-first drift detection on `.agents/skills/specdev/`, surfaced through the `spec_diagnostics` shared by `check` and `status`, remedy `specdev skill install --local`. Dogfooded live in this repo (SKILL.md edit → warning → reinstall with the working-tree build → clean).
 ## Next
-
-User commits the batch (titles suggested in session). Then task 0007 — release 0.4.0 — when the user says go.
+On acceptance of 0010: `task done 10`, hand the tree to the user for his commit. The 0.4.0 ctx task then has every box ticked — ask about archiving it to CHANGELOG and resetting ctx to header-only.

@@ -8,7 +8,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::Error;
-use crate::config::{Config, Limits, Quality};
+use crate::config::Config;
 use crate::diag::{Diagnostic, Severity};
 use crate::md;
 use crate::scan;
@@ -53,16 +53,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn limits(self, quality: &Quality) -> Option<&Limits> {
-        match self {
-            Self::Task => Some(&quality.task),
-            Self::Ctx => Some(&quality.ctx),
-            Self::Overview => Some(&quality.overview),
-            Self::Changelog => Some(&quality.changelog),
-            Self::Spec => None,
-        }
-    }
-
     fn name(self) -> &'static str {
         match self {
             Self::Task => "task files",
@@ -75,7 +65,9 @@ impl Kind {
 
     fn advice(self) -> &'static str {
         match self {
-            Self::Task => "split the task or move detail out",
+            Self::Task => {
+                "split into smaller tasks ordered by `depends`, move detail out, or raise the grade (`specdev task set <id> grade <name>`)"
+            }
             Self::Ctx => {
                 "route content to its home file (overview, roadmap, task files)"
             }
@@ -87,12 +79,14 @@ impl Kind {
 }
 
 /// Threshold and table/diagram diagnostics for one file. `scope_len` is
-/// the task's scope size (tasks only).
+/// the task's scope size and `grade` its declared size grade (tasks only):
+/// the grade's keys win, the rest inherit from `[quality.task]`.
 pub fn diagnostics(
     path: &Path,
     content: &str,
     kind: Kind,
     scope_len: Option<usize>,
+    grade: Option<&str>,
     config: &Config,
 ) -> Vec<Diagnostic> {
     let quality = &config.quality;
@@ -105,7 +99,14 @@ pub fn diagnostics(
     let metrics = measure_with(content, &outline);
     let mut diags = Vec::new();
 
-    if let Some(limits) = kind.limits(quality) {
+    let limits = match kind {
+        Kind::Task => Some(quality.task_limits(grade)),
+        Kind::Ctx => Some(quality.ctx.clone()),
+        Kind::Overview => Some(quality.overview.clone()),
+        Kind::Changelog => Some(quality.changelog.clone()),
+        Kind::Spec => None,
+    };
+    if let Some(limits) = limits {
         let mut over =
             |code: &'static str, what: &str, value: usize, max: Option<usize>| {
                 if let Some(max) = max
@@ -201,7 +202,7 @@ pub fn spec_diagnostics(
     let mut diags = Vec::new();
     for (path, kind) in files {
         let content = fs::read_to_string(&path)?;
-        diags.extend(diagnostics(&path, &content, kind, None, config));
+        diags.extend(diagnostics(&path, &content, kind, None, None, config));
     }
     Ok(diags)
 }
@@ -263,11 +264,23 @@ code
     fn limits_fire_above_max_only() {
         let config = Config::default();
         let path = Path::new("t.md");
-        let at =
-            diagnostics(path, &task_with_steps(8), Kind::Task, Some(6), &config);
+        let at = diagnostics(
+            path,
+            &task_with_steps(8),
+            Kind::Task,
+            Some(6),
+            None,
+            &config,
+        );
         assert!(at.is_empty(), "{at:?}");
-        let over =
-            diagnostics(path, &task_with_steps(9), Kind::Task, Some(7), &config);
+        let over = diagnostics(
+            path,
+            &task_with_steps(9),
+            Kind::Task,
+            Some(7),
+            None,
+            &config,
+        );
         assert_eq!(
             codes(&over),
             [
@@ -282,14 +295,18 @@ code
         );
 
         let long = "line\n".repeat(401);
-        let log = diagnostics(path, &long, Kind::Changelog, None, &config);
+        let log = diagnostics(path, &long, Kind::Changelog, None, None, &config);
         assert_eq!(codes(&log), [("quality-lines", Severity::Warning)]);
         assert!(log[0].message.contains("compress older entries"));
-        assert!(diagnostics(path, &long, Kind::Spec, None, &config).is_empty());
+        assert!(
+            diagnostics(path, &long, Kind::Spec, None, None, &config).is_empty()
+        );
 
         let mut off = Config::default();
         off.quality.changelog.max_lines = Some(0);
-        assert!(diagnostics(path, &long, Kind::Changelog, None, &off).is_empty());
+        assert!(
+            diagnostics(path, &long, Kind::Changelog, None, None, &off).is_empty()
+        );
     }
 
     #[test]
@@ -297,13 +314,35 @@ code
         let config = Config::default();
         let path = Path::new("t.md");
         let wordy = format!("# Task: x\n\n{}\n", "word ".repeat(1000));
-        let diags = diagnostics(path, &wordy, Kind::Task, None, &config);
+        let diags = diagnostics(path, &wordy, Kind::Task, None, None, &config);
         assert_eq!(codes(&diags), [("quality-words", Severity::Warning)]);
         assert!(
             diags[0]
                 .message
                 .contains("1003 words (max 1000 for task files)")
         );
+        assert!(
+            diags[0].message.contains("raise the grade"),
+            "advice names the remedies: {}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn a_grade_raises_the_task_limits() {
+        let config = Config::default();
+        let path = Path::new("t.md");
+        // 9 plan steps: over the default grade, inside `huge`.
+        let content = task_with_steps(9);
+        let diags = diagnostics(path, &content, Kind::Task, None, None, &config);
+        assert_eq!(codes(&diags), [("quality-plan-steps", Severity::Warning)]);
+        let graded =
+            diagnostics(path, &content, Kind::Task, None, Some("huge"), &config);
+        assert!(graded.is_empty(), "{graded:?}");
+        // `tiny` is tighter still.
+        let tiny =
+            diagnostics(path, &content, Kind::Task, None, Some("tiny"), &config);
+        assert_eq!(codes(&tiny), [("quality-plan-steps", Severity::Warning)]);
     }
 
     #[test]
@@ -311,10 +350,12 @@ code
         let mut config = Config::default();
         let content = "# Ideas\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```\n+--+\n|  |\n+--+\n```\n";
         let path = Path::new("specs/ideas.md");
-        assert!(diagnostics(path, content, Kind::Spec, None, &config).is_empty());
+        assert!(
+            diagnostics(path, content, Kind::Spec, None, None, &config).is_empty()
+        );
 
         config.quality.forbid_tables = true;
-        let diags = diagnostics(path, content, Kind::Spec, None, &config);
+        let diags = diagnostics(path, content, Kind::Spec, None, None, &config);
         assert_eq!(
             codes(&diags),
             [
@@ -325,7 +366,7 @@ code
         assert_eq!((diags[0].line, diags[1].line), (Some(3), Some(7)));
 
         config.quality.errors = true;
-        let diags = diagnostics(path, content, Kind::Spec, None, &config);
+        let diags = diagnostics(path, content, Kind::Spec, None, None, &config);
         assert!(diags.iter().all(|d| d.severity == Severity::Error));
     }
 }

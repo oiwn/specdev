@@ -90,7 +90,7 @@ State: <not started | in progress | blocked>
 
 ## Task files and the pipeline
 
-A task file is `specs/tasks/<id>.md`: flat-YAML frontmatter (owned by specdev), a Markdown body (yours), and a `## Log` at the end (owned by specdev). The contract (required sections, extra fields, attempts cap, acceptance defaults, quality limits) is in `specdev.toml`.
+A task file is `specs/tasks/<id>.md`: flat-YAML frontmatter (owned by specdev), a Markdown body (yours), and a `## Log` at the end (owned by specdev). The contract (required sections, extra fields, attempts cap, acceptance defaults, quality limits, grades) is in `specdev.toml` — read `references/config.md` before editing that file.
 
 ```md
 ---
@@ -100,6 +100,7 @@ stage: verify
 scope: [src/status.rs, tests/cli.rs]
 created: 2026-10-02
 source: https://github.com/org/repo/issues/12
+grade: huge
 ---
 # Task: warn when ctx.md is stale while in progress
 
@@ -114,11 +115,13 @@ source: https://github.com/org/repo/issues/12
 
 **Who owns what:**
 
-- **Commands own:** `status`, `stage`, `scope`, `attempts`, `blocked_reason`, `source`, `depends`, the `## Log`, the file's location, and `_index.md`.
+- **Commands own:** `status`, `stage`, `scope`, `attempts`, `blocked_reason`, `source`, `grade`, `depends`, the `## Log`, the file's location, and `_index.md`.
 - **You own:** the title (set once at creation), the prose sections, ticking Plan and Acceptance boxes, ticking Manual checks with evidence (see "Approval and closing"), and closing the task once the user accepts it.
 - **The user owns:** approval of drafts (`task approve`, in their words) and acceptance of results, waivers, and git: branches, commits, the PR, the merge, the deploy. specdev never writes to git and never runs project commands.
 
 **Writing a task file — keep it short:**
+
+- **Match the `grade` to the task's real size** (`task set <id> grade <name>`; the project's `[quality.grade.<name>]` tables define them, `tiny`/`huge` ship by default). Prefer splitting into smaller tasks ordered by `depends` over raising the grade — `huge` is for user-mandated umbrella/working-manual tasks, and a grade you didn't justify gets eyeballed at the draft gate.
 
 - Acceptance items are exact commands with their flags (`cargo test --workspace --all-features`), not prose. Include what the repo's commit hooks and CI run (read `prek.toml`, `.pre-commit-config.yaml`, CI workflows); `[acceptance] default` in `specdev.toml` should hold those.
 - Manual checks: at most three short items, only what a human must see (a layout, a flow). Everything else is a Suggested check or nothing.
@@ -127,7 +130,7 @@ source: https://github.com/org/repo/issues/12
 
 **Stages, in order** (happy path: draft → ready → implement → verify → review → approval → done):
 
-1. **draft** — `specdev task new <slug>`; `specdev task set <id> source "<issue or request>"`; add files with `specdev task scope <id> add <path> --reason "..."`; write Plan and Acceptance (`task new` pre-fills project defaults). The human reviews with `^^^`; you answer with `&&&`. When the human approves, record their words with `specdev task approve <id> --note "<their words>"` (their decision — quote, don't paraphrase), compress the dialogue into the plan, then `specdev task advance <id>` → ready. It refuses while `^^^` remarks are open or without the recorded approval, and it records the approved scope.
+1. **draft** — `specdev task new <slug>`; `specdev task set <id> source "<issue or request>"`; add files with `specdev task scope <id> add <path> --reason "..."`; write Plan and Acceptance (`task new` pre-fills project defaults); declare a size grade with `specdev task set <id> grade <name>` only when the task isn't default-sized. The human reviews with `^^^`; you answer with `&&&`. When the human approves, record their words with `specdev task approve <id> --note "<their words>"` (their decision — quote, don't paraphrase), compress the dialogue into the plan, then `specdev task advance <id>` → ready. It refuses while `^^^` remarks are open or without the recorded approval, and it records the approved scope.
 2. **ready** — queued. `specdev task advance <id>` → in-progress/implement; refused while another task is in progress (one in the works at a time; tasks waiting in approval don't count).
 3. **implement** — code only inside `scope`. Need another file? `specdev task scope <id> add <path>... --reason "..."` *before* touching it; a large expansion means the plan was wrong — say so. Tick Plan boxes; `specdev task advance <id>` → verify (refused while Plan boxes are unticked).
 4. **verify** — run every Acceptance command yourself and tick each one that passes; specdev only checks the ticks. During development use focused checks; before ticking, run the full scope the repo's hooks and CI run (same features, targets, flags). Don't rerun a passing broad suite unless code changed since. All pass → `specdev task advance <id>` → review. Any fail → `specdev task advance <id> --to fix`.
@@ -170,8 +173,9 @@ State commands already refuse changes that would fail `check`, so you don't need
 - **Log consistency** (`log-*`, `log-mismatch`): the frontmatter must equal what the `## Log` replays to. A mismatch means someone edited state by hand. Don't "repair" it by editing the log; tell the user what differs and let them decide.
 - **Scope** (`out-of-scope`): changed files (from git) outside the active task's scope. Add them with `task scope add --reason`, or revert the change. When the message says the file is `in scope of` another open task, the change belongs to that task — switch tasks rather than widening this one. On the working tree this is a **warning** while `[task] explicit_only = true` (default): a small direct fix is fine, fix it and move on; don't create a task just to silence it. With `explicit_only = false` it is an error again. Anything under `specs/` and the project's `[scope] always_allowed` globs never count. Files already changed when the task started (earlier uncommitted work) are recorded as its baseline and don't count until you edit them again — never widen scope just to cover someone else's changes. Prefer exact paths; use a glob only when the task really edits most of what it matches.
 - **Repo:** one task in progress (`active-tasks`; tasks in approval don't count), `_index.md` up to date (`index-stale` → `specdev task index`).
-- **Quality** (`quality-*`, `md-table`, `ascii-diagram`): files over their line or word limits, too many plan steps, too large a scope. Act on them: split the task, route content out of `ctx.md`, compress older CHANGELOG entries.
+- **Quality** (`quality-*`, `md-table`, `ascii-diagram`): files over their line or word limits, too many plan steps, too large a scope. Act on them: split the task, route content out of `ctx.md`, compress older CHANGELOG entries. Tasks are measured against their declared `grade` (default `[quality.task]`); an over-grade task says so — split it, or raise the grade if the size is real and user-mandated.
 - **Format** (`unformatted`): run `specdev fmt` rather than re-wrapping by hand.
+- **Local skill** (`skill-stale`): the project's `.agents/skills/specdev/` drifted from this specdev version — a stale stamp, modified, or missing file. Fix with `specdev skill install --local`; don't hand-edit an installed skill.
 
 **Refusals are the safety net.** A state command that would leave the task failing `check` refuses and prints the diagnostics ("refused: this change would make `specdev check` fail"). Fix the cause in the prose or with the right command; never work around a refusal by editing frontmatter or the log.
 
