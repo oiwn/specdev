@@ -19,6 +19,10 @@ required_sections = ["Plan", "Acceptance"]
 optional_sections = ["Summary", "Manual checks", "Context", "Findings", "Review", "Spec updates"]
 # Project-specific optional frontmatter fields.
 extra_fields = []
+# Tasks are created only when the user asks for one; small fixes are direct
+# edits. While true, working-tree out-of-scope findings are warnings.
+# false restores task-per-small-change and makes out-of-scope an error.
+explicit_only = true
 
 [pipeline]
 # Failed verifies (verify → fix) before a task is blocked; revisions don't count.
@@ -76,6 +80,10 @@ pub struct TaskDef {
     pub required_sections: Vec<String>,
     pub optional_sections: Vec<String>,
     pub extra_fields: Vec<String>,
+    /// Tasks exist only when the user asks for one (#19). While true, a
+    /// working-tree `out-of-scope` finding is a warning, so a small direct
+    /// fix doesn't pressure the agent into creating a task.
+    pub explicit_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -181,6 +189,7 @@ impl Default for TaskDef {
                 "Spec updates",
             ]),
             extra_fields: Vec::new(),
+            explicit_only: true,
         }
     }
 }
@@ -241,6 +250,14 @@ mod tests {
         assert_eq!(c.pipeline.max_attempts, 5);
         assert_eq!(c.task, TaskDef::default());
         assert_eq!(c.quality, Quality::default());
+    }
+
+    #[test]
+    fn explicit_only_defaults_true_and_can_be_turned_off() {
+        assert!(Config::default().task.explicit_only);
+        let c = Config::parse("[task]\nexplicit_only = false\n").unwrap();
+        assert!(!c.task.explicit_only);
+        assert_eq!(c.pipeline, Pipeline::default());
     }
 
     #[test]

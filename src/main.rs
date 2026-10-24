@@ -60,8 +60,11 @@ enum Commands {
     Status,
     /// Normalize spec Markdown: unwrap paragraphs, `-` bullets, blank lines around headings
     Fmt {
-        /// Files to format (default: specs/*.md and open task files)
+        /// Files to format; must be inside the default set (specs/*.md and open task files)
         files: Vec<PathBuf>,
+        /// Report files that would change without writing; exit 1 if any
+        #[arg(long)]
+        check: bool,
     },
     /// Validate task files, their logs, the task index, scope, and spec rules
     Check {
@@ -123,6 +126,14 @@ enum TaskCommands {
         #[arg(long)]
         reason: String,
     },
+    /// Record the human's approval of a draft (required before advance to ready)
+    Approve {
+        /// Task id, sequence number, or slug
+        id: String,
+        /// The human's words, quoted
+        #[arg(long)]
+        note: Option<String>,
+    },
     /// Set a plain frontmatter field: source, depends, or a configured extra field
     Set {
         /// Task id, sequence number, or slug
@@ -163,7 +174,12 @@ enum ScopeAction {
         reason: String,
     },
     /// Remove a scope entry
-    Rm { path: String },
+    Rm {
+        path: String,
+        /// Why the entry is dropped (optional)
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug, PartialEq)]
@@ -190,7 +206,9 @@ fn main() {
         Commands::Check { staged, verbose } => {
             check::run(Path::new(""), staged, verbose, format)
         }
-        Commands::Fmt { files } => fmt::run(Path::new(""), &files, format),
+        Commands::Fmt { files, check } => {
+            fmt::run(Path::new(""), &files, check, format)
+        }
         Commands::List { stats } => list::run(stats, format),
         Commands::Skill { command } => output::require_text("skill", format)
             .and_then(|()| match command {
@@ -221,6 +239,9 @@ fn main() {
                 TaskCommands::Block { id, reason } => {
                     task::state::block(root, &id, &reason, format)
                 }
+                TaskCommands::Approve { id, note } => {
+                    task::state::approve(root, &id, note.as_deref(), format)
+                }
                 TaskCommands::Set { id, field, value } => {
                     task::state::set(root, &id, &field, &value, format)
                 }
@@ -228,9 +249,13 @@ fn main() {
                     ScopeAction::Add { paths, reason } => {
                         task::state::scope_add(root, &id, &paths, &reason, format)
                     }
-                    ScopeAction::Rm { path } => {
-                        task::state::scope_rm(root, &id, &path, format)
-                    }
+                    ScopeAction::Rm { path, reason } => task::state::scope_rm(
+                        root,
+                        &id,
+                        &path,
+                        reason.as_deref(),
+                        format,
+                    ),
                 },
             }
         }
@@ -287,11 +312,18 @@ mod tests {
 
     #[test]
     fn parses_fmt() {
-        assert_eq!(cli(&["fmt"]).unwrap(), Commands::Fmt { files: vec![] });
         assert_eq!(
-            cli(&["fmt", "specs/a.md", "specs/b.md"]).unwrap(),
+            cli(&["fmt"]).unwrap(),
             Commands::Fmt {
-                files: vec!["specs/a.md".into(), "specs/b.md".into()]
+                files: vec![],
+                check: false
+            }
+        );
+        assert_eq!(
+            cli(&["fmt", "--check", "specs/a.md", "specs/b.md"]).unwrap(),
+            Commands::Fmt {
+                files: vec!["specs/a.md".into(), "specs/b.md".into()],
+                check: true
             }
         );
     }
@@ -323,6 +355,34 @@ mod tests {
             }
         );
         assert!(cli(&["task", "scope", "3", "add", "--reason", "r"]).is_err());
+        assert_eq!(
+            task(&["task", "scope", "3", "rm", "src/a.rs"]),
+            TaskCommands::Scope {
+                id: "3".into(),
+                action: ScopeAction::Rm {
+                    path: "src/a.rs".into(),
+                    reason: None
+                }
+            }
+        );
+        assert_eq!(
+            task(&[
+                "task",
+                "scope",
+                "3",
+                "rm",
+                "src/a.rs",
+                "--reason",
+                "not needed"
+            ]),
+            TaskCommands::Scope {
+                id: "3".into(),
+                action: ScopeAction::Rm {
+                    path: "src/a.rs".into(),
+                    reason: Some("not needed".into())
+                }
+            }
+        );
         assert_eq!(
             task(&["task", "set", "3", "source", ""]),
             TaskCommands::Set {

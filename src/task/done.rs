@@ -262,12 +262,25 @@ fn changelog_entry(
     format!("## {date} — {title}\n\n- {summary}\n- Task `{id}`{source}\n")
 }
 
-/// Insert `entry` above the newest entry (the first level-2 heading outside
-/// code and HTML blocks), keeping every other byte; append when the
-/// changelog has no entries yet.
+/// A `## 2026-10-05 — title` entry heading; a `[2026-10-05]` bracket prefix
+/// (keep-a-changelog style) is tolerated.
+fn is_dated_entry(heading: &md::Heading) -> bool {
+    let text = heading.text.trim_start_matches('[');
+    text.len() >= 10 && NaiveDate::parse_from_str(&text[..10], "%Y-%m-%d").is_ok()
+}
+
+/// Insert `entry` above the newest dated entry (`## YYYY-MM-DD …` — the
+/// dated region is newest-first), keeping every other byte. Changelogs with
+/// no dated entries get the entry above their first level-2 heading of any
+/// kind; one with no level-2 headings at all gets it appended.
 fn insert_entry(existing: &str, entry: &str) -> String {
     let outline = md::outline(existing);
-    match outline.headings.iter().find(|h| h.level == 2) {
+    let target = outline
+        .headings
+        .iter()
+        .find(|h| h.level == 2 && is_dated_entry(h))
+        .or_else(|| outline.headings.iter().find(|h| h.level == 2));
+    match target {
         Some(h) => {
             let at: usize = existing
                 .split_inclusive('\n')
@@ -360,6 +373,36 @@ Intro.
         assert_eq!(
             out,
             "# Changelog\n\n```\n## not an entry\n```\n\n## NEW\n\n## real\n"
+        );
+    }
+
+    #[test]
+    fn dated_entries_win_over_earlier_undated_headings() {
+        let old = "# Changelog\n\n## [Unreleased]\n\n- pending\n\n## Notes\n\nlong\nprose\n\n## 2026-10-01 — shipped\n\n- x\n";
+        let out = insert_entry(old, "## NEW\n");
+        assert_eq!(
+            out,
+            "# Changelog\n\n## [Unreleased]\n\n- pending\n\n## Notes\n\nlong\nprose\n\n## NEW\n\n## 2026-10-01 — shipped\n\n- x\n"
+        );
+    }
+
+    #[test]
+    fn bracketed_dates_count_as_entries() {
+        let old = "# Changelog\n\n## [Unreleased]\n\n- pending\n\n## [2026-10-01] — shipped\n\n- x\n";
+        let out = insert_entry(old, "## NEW\n");
+        assert_eq!(
+            out,
+            "# Changelog\n\n## [Unreleased]\n\n- pending\n\n## NEW\n\n## [2026-10-01] — shipped\n\n- x\n"
+        );
+    }
+
+    #[test]
+    fn undated_only_changelog_keeps_the_first_heading_rule() {
+        let old = "# Changelog\n\nlong\nintro.\n\n## [Unreleased]\n\n- pending\n";
+        let out = insert_entry(old, "## NEW\n");
+        assert_eq!(
+            out,
+            "# Changelog\n\nlong\nintro.\n\n## NEW\n\n## [Unreleased]\n\n- pending\n"
         );
     }
 

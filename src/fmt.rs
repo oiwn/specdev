@@ -15,12 +15,33 @@ use crate::md;
 use crate::output::{self, Format, Report};
 use crate::task::TASKS_DIR;
 
-pub fn run(root: &Path, files: &[PathBuf], format: Format) -> Result<(), Error> {
-    let targets = if files.is_empty() {
-        default_files(root)?
-    } else {
-        files.iter().map(|f| root.join(f)).collect()
-    };
+pub fn run(
+    root: &Path,
+    files: &[PathBuf],
+    check: bool,
+    format: Format,
+) -> Result<(), Error> {
+    let allowed = default_files(root)?;
+    let targets = resolve_targets(root, files, &allowed)?;
+    if check {
+        let mut report = FmtCheckReport {
+            would_change: Vec::new(),
+            unchanged: 0,
+        };
+        for path in targets {
+            let content = read(&path)?;
+            if normalize(&content) == content {
+                report.unchanged += 1;
+            } else {
+                report.would_change.push(path.display().to_string());
+            }
+        }
+        output::emit(&report, format)?;
+        return match report.would_change.len() {
+            0 => Ok(()),
+            n => Err(Error::CheckFailed(n)),
+        };
+    }
     let mut report = FmtReport {
         changed: Vec::new(),
         unchanged: 0,
@@ -36,6 +57,42 @@ pub fn run(root: &Path, files: &[PathBuf], format: Format) -> Result<(), Error> 
         }
     }
     output::emit(&report, format)
+}
+
+/// Explicit paths may only narrow the default set: every target must be one
+/// of `default_files`. Anything else (`README.md`, `specs/tasks/done/…`,
+/// `_index.md`) is refused before a single read or write.
+fn resolve_targets(
+    root: &Path,
+    files: &[PathBuf],
+    allowed: &[PathBuf],
+) -> Result<Vec<PathBuf>, Error> {
+    if files.is_empty() {
+        return Ok(allowed.to_vec());
+    }
+    let allowed: HashSet<PathBuf> = allowed
+        .iter()
+        .filter_map(|p| p.canonicalize().ok())
+        .collect();
+    let mut targets = Vec::new();
+    let mut rejected = Vec::new();
+    for file in files {
+        let path = root.join(file);
+        if path.canonicalize().is_ok_and(|c| allowed.contains(&c)) {
+            targets.push(path);
+        } else {
+            rejected.push(file.display().to_string());
+        }
+    }
+    if rejected.is_empty() {
+        targets.sort();
+        Ok(targets)
+    } else {
+        Err(Error::Usage(format!(
+            "fmt covers only specs/*.md and open task files; not {}",
+            rejected.join(", ")
+        )))
+    }
 }
 
 /// `specs/*.md` and the open task files `specs/tasks/*.md` (no generated
@@ -170,14 +227,37 @@ impl Report for FmtReport {
         if self.changed.is_empty() {
             return format!("All {} files already formatted", self.unchanged);
         }
-        let mut out: Vec<String> = self
-            .changed
-            .iter()
-            .map(|p| format!("Formatted {p}"))
-            .collect();
+        let mut out = Vec::<String>::new();
+        for path in &self.changed {
+            out.push(format!("Formatted {path}"));
+        }
         out.push(format!(
             "{} formatted, {} already formatted",
             self.changed.len(),
+            self.unchanged
+        ));
+        out.join("\n")
+    }
+}
+
+#[derive(Serialize)]
+struct FmtCheckReport {
+    would_change: Vec<String>,
+    unchanged: usize,
+}
+
+impl Report for FmtCheckReport {
+    fn text(&self) -> String {
+        if self.would_change.is_empty() {
+            return format!("All {} files already formatted", self.unchanged);
+        }
+        let mut out = Vec::<String>::new();
+        for path in &self.would_change {
+            out.push(format!("Would reformat {path}"));
+        }
+        out.push(format!(
+            "{} would reformat, {} already formatted",
+            self.would_change.len(),
             self.unchanged
         ));
         out.join("\n")
@@ -188,6 +268,46 @@ impl Report for FmtReport {
 mod tests {
     use super::*;
     use crate::task::Task;
+
+    #[test]
+    fn explicit_paths_must_be_in_the_default_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let specs = tmp.path().join("specs");
+        fs::create_dir_all(specs.join("tasks/done")).unwrap();
+        fs::write(specs.join("ctx.md"), "# Current Task Context\n").unwrap();
+        fs::write(specs.join("tasks/done/0001-x.md"), "# done\n").unwrap();
+        fs::write(specs.join("tasks/_index.md"), "generated\n").unwrap();
+        fs::write(tmp.path().join("README.md"), "# read\n").unwrap();
+
+        let allowed = default_files(tmp.path()).unwrap();
+        assert_eq!(allowed, vec![specs.join("ctx.md")]);
+
+        let ok = resolve_targets(tmp.path(), &["specs/ctx.md".into()], &allowed)
+            .unwrap();
+        assert_eq!(ok, vec![specs.join("ctx.md")]);
+
+        for bad in [
+            "README.md",
+            "specs/tasks/done/0001-x.md",
+            "specs/tasks/_index.md",
+        ] {
+            let err =
+                resolve_targets(tmp.path(), &[bad.into()], &allowed).unwrap_err();
+            assert!(err.to_string().contains(bad), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn relative_and_absolute_spelling_of_the_same_file_is_accepted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let specs = tmp.path().join("specs");
+        fs::create_dir_all(&specs).unwrap();
+        fs::write(specs.join("ctx.md"), "# Current Task Context\n").unwrap();
+        let allowed = default_files(tmp.path()).unwrap();
+        let absolute = specs.join("ctx.md");
+        let ok = resolve_targets(tmp.path(), &[absolute], &allowed).unwrap();
+        assert_eq!(ok.len(), 1);
+    }
 
     /// `normalize`, checked to be idempotent on every input.
     fn fmt(input: &str) -> String {

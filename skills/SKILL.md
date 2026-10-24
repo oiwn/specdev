@@ -59,7 +59,8 @@ Content is routed by *when* it lives. This keeps `ctx.md` and task files clean.
 Content matures in one direction, then archives: `ideas.md` (uncommitted) → `roadmap.md` (committed) → `ctx.md` or `specs/tasks/` (active) → `CHANGELOG.md` (done).
 
 - An idea moves to `roadmap.md` when decided; a roadmap item becomes active work when picked up.
-- Small, well-defined work (one commit) becomes a **task file** and runs through the task pipeline below. A roadmap item bigger than one commit is split into several task files ordered by `depends`.
+- **Tasks are explicit.** Never create a task file (or any other specdev record) unless the user asks for one — "create a task for X", "track this". Small fixes are direct edits plus normal verification: no task, no log, no CHANGELOG churn. Don't create structure to please `check`; a working-tree `out-of-scope` finding is a warning for exactly that reason.
+- When the user asks for a task, small well-defined work (one commit) becomes a **task file** through the pipeline below; a roadmap item bigger than one commit is split into several task files ordered by `depends`. Projects that want a task for every small change set `[task] explicit_only = false` in `specdev.toml` (which also makes out-of-scope an error).
 - Design work and big, fuzzy work run directly in **`ctx.md`** with a checkbox plan.
 - When nothing is active, the next item comes from `roadmap.md` or the task queue.
 
@@ -115,7 +116,7 @@ source: https://github.com/org/repo/issues/12
 
 - **Commands own:** `status`, `stage`, `scope`, `attempts`, `blocked_reason`, `source`, `depends`, the `## Log`, the file's location, and `_index.md`.
 - **You own:** the title (set once at creation), the prose sections, ticking Plan and Acceptance boxes, ticking Manual checks with evidence (see "Approval and closing"), and closing the task once the user accepts it.
-- **The user owns:** acceptance, waivers, and git: branches, commits, the PR, the merge, the deploy. specdev never writes to git and never runs project commands.
+- **The user owns:** approval of drafts (`task approve`, in their words) and acceptance of results, waivers, and git: branches, commits, the PR, the merge, the deploy. specdev never writes to git and never runs project commands.
 
 **Writing a task file — keep it short:**
 
@@ -126,13 +127,13 @@ source: https://github.com/org/repo/issues/12
 
 **Stages, in order** (happy path: draft → ready → implement → verify → review → approval → done):
 
-1. **draft** — `specdev task new <slug>`; `specdev task set <id> source "<issue or request>"`; add files with `specdev task scope <id> add <path> --reason "..."`; write Plan and Acceptance (`task new` pre-fills project defaults). The human reviews with `^^^`; you answer with `&&&`. When the human approves, compress the dialogue into the plan, then `specdev task advance <id>` → ready. It refuses while `^^^` remarks are open, and it records the approved scope.
+1. **draft** — `specdev task new <slug>`; `specdev task set <id> source "<issue or request>"`; add files with `specdev task scope <id> add <path> --reason "..."`; write Plan and Acceptance (`task new` pre-fills project defaults). The human reviews with `^^^`; you answer with `&&&`. When the human approves, record their words with `specdev task approve <id> --note "<their words>"` (their decision — quote, don't paraphrase), compress the dialogue into the plan, then `specdev task advance <id>` → ready. It refuses while `^^^` remarks are open or without the recorded approval, and it records the approved scope.
 2. **ready** — queued. `specdev task advance <id>` → in-progress/implement; refused while another task is in progress (one in the works at a time; tasks waiting in approval don't count).
 3. **implement** — code only inside `scope`. Need another file? `specdev task scope <id> add <path>... --reason "..."` *before* touching it; a large expansion means the plan was wrong — say so. Tick Plan boxes; `specdev task advance <id>` → verify (refused while Plan boxes are unticked).
 4. **verify** — run every Acceptance command yourself and tick each one that passes; specdev only checks the ticks. During development use focused checks; before ticking, run the full scope the repo's hooks and CI run (same features, targets, flags). Don't rerun a passing broad suite unless code changed since. All pass → `specdev task advance <id>` → review. Any fail → `specdev task advance <id> --to fix`.
 5. **review** — judge the diff against Plan and scope (ideally a fresh session); write `## Review` (required to leave review). Approve → `specdev task advance <id>` → approval. Changes needed → `--to fix`.
 
-**One call instead of three.** When the work is done — Plan ticked, Acceptance run and ticked, `## Review` written — move straight there: `specdev task advance <id> --to approval`. It walks implement → verify → review → approval, checks every gate on the way, logs every step, and writes nothing if a gate fails ("stopped at verify → review: …"). It also works from `ready` (`--to implement` is a plain step). It never walks out of `draft`: approving the draft is the user's step. Don't advance stage by stage when one walk does it, and don't run `check` between steps.
+**One call instead of three.** When the work is done — Plan ticked, Acceptance run and ticked, `## Review` written — move straight there: `specdev task advance <id> --to approval`. It walks implement → verify → review → approval, checks every gate on the way, logs every step, and writes nothing if a gate fails ("stopped at verify → review: …"). It also works from `ready` (`--to implement` is a plain step). It never walks out of `draft`: `task approve` and the advance past draft are the user's steps. Don't advance stage by stage when one walk does it, and don't run `check` between steps.
 6. **fix** — address `## Review` notes, user feedback, or failures; `specdev task advance <id>` → verify. Only a *failed verify* (verify → fix) counts as a repair attempt; past `max_attempts` the task is blocked automatically. Review notes and user feedback (review/approval → fix) are revisions and are logged, not counted.
 7. **approval** — write a one-line `## Summary`, then show the user what changed and what remains. Wait for their acceptance (see below). You may start another authorized task meanwhile; this one doesn't hold the slot.
 8. **done** — once the user accepts: `specdev task done <id> --approval "<their words>"`. It logs the approval, archives to `specs/tasks/done/`, writes the CHANGELOG entry, and updates the index. It never touches git. Close tasks *before* the final PR commit, so the commit carries the finished docs; merge and deploy are release events, not part of done. Refused while Manual checks are unticked or the Summary is missing.
@@ -167,7 +168,7 @@ State commands already refuse changes that would fail `check`, so you don't need
 
 - **Contract:** required sections, `stage` only while in progress, `blocked_reason` only while blocked, `depends` exist, id matches the file name. Empty scope, Plan, or Acceptance is a warning in draft and an error after.
 - **Log consistency** (`log-*`, `log-mismatch`): the frontmatter must equal what the `## Log` replays to. A mismatch means someone edited state by hand. Don't "repair" it by editing the log; tell the user what differs and let them decide.
-- **Scope** (`out-of-scope`): changed files (from git) outside the active task's scope. Add them with `task scope add --reason`, or revert the change. Anything under `specs/` and the project's `[scope] always_allowed` globs never count. Files already changed when the task started (earlier uncommitted work) are recorded as its baseline and don't count until you edit them again — never widen scope just to cover someone else's changes. Prefer exact paths; use a glob only when the task really edits most of what it matches.
+- **Scope** (`out-of-scope`): changed files (from git) outside the active task's scope. Add them with `task scope add --reason`, or revert the change. When the message says the file is `in scope of` another open task, the change belongs to that task — switch tasks rather than widening this one. On the working tree this is a **warning** while `[task] explicit_only = true` (default): a small direct fix is fine, fix it and move on; don't create a task just to silence it. With `explicit_only = false` it is an error again. Anything under `specs/` and the project's `[scope] always_allowed` globs never count. Files already changed when the task started (earlier uncommitted work) are recorded as its baseline and don't count until you edit them again — never widen scope just to cover someone else's changes. Prefer exact paths; use a glob only when the task really edits most of what it matches.
 - **Repo:** one task in progress (`active-tasks`; tasks in approval don't count), `_index.md` up to date (`index-stale` → `specdev task index`).
 - **Quality** (`quality-*`, `md-table`, `ascii-diagram`): files over their line or word limits, too many plan steps, too large a scope. Act on them: split the task, route content out of `ctx.md`, compress older CHANGELOG entries.
 - **Format** (`unformatted`): run `specdev fmt` rather than re-wrapping by hand.
@@ -177,12 +178,13 @@ State commands already refuse changes that would fail `check`, so you don't need
 ## CLI tools
 
 - `specdev init` — scaffold `specs/` (overview, ctx, roadmap, ideas, cleanup, `tasks/`, `tasks/done/`), `specdev.toml`, and root `CHANGELOG.md`/`AGENTS.md` (append-aware). Safe to re-run.
-- `specdev task new|list|show|index|advance|block|set|scope|done` — the task pipeline above.
+- `specdev task new|list|show|index|advance|block|set|scope|done|approve` — the task pipeline above.
+- `specdev task approve <id> --note "<their words>"` — the human's approval of a draft; required before `advance` to ready.
 - `specdev task advance <id> [--to <stage>]` — next step, or walk forward to a later stage in one call (every gate checked).
 - `specdev task done <id>... [--approval "<quote>"] [--dry-run]` — close one or several accepted tasks; checks them all before writing anything.
-- `specdev task scope <id> add <path>... --reason "..."` — several paths in one call.
+- `specdev task scope <id> add <path>... --reason "..."` — several paths in one call. `specdev task scope <id> rm <path> [--reason "..."]` drops one entry (also logged).
 - `specdev check [--staged] [--verbose]` — everything above.
-- `specdev fmt [<file>...]` — normalize Markdown in `specs/` and open task files: soft-wrap paragraphs, `-` bullets, blank lines around headings. Code, tables, links, and `^^^`/`&&&` lines stay as written.
+- `specdev fmt [<file>...] [--check]` — normalize Markdown in `specs/` and open task files: soft-wrap paragraphs, `-` bullets, blank lines around headings. Code, tables, links, and `^^^`/`&&&` lines stay as written. Explicit paths must be inside that set — `fmt` never touches unrelated files. `--check` reports without writing and exits 1 when something needs formatting (CI/hooks).
 - `specdev scan` — `^^^`/`&&&` remarks across `specs/` and open task files, open vs resolved.
 - `specdev status` — health summary: markers, ctx progress, ctx warnings.
 - `specdev list [--stats]` — spec files with header and size; `--stats` adds headings, checkboxes, remarks, words, code blocks, tables.

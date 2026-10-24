@@ -92,6 +92,11 @@ pub fn spec_diagnostics(root: &Path) -> Result<Vec<Diagnostic>, Error> {
     Ok(diags)
 }
 
+/// The `ctx.md` H1: `# Current Task Context`, or `… Context: <task>` while
+/// work is active. The header is the task identity; drift breaks everything
+/// that reads it (`list`, `status`, the agent).
+const CTX_HEADER: &str = "# Current Task Context";
+
 fn ctx_diagnostics(path: &Path, content: &str) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     let (done, total) = count_checkboxes(content);
@@ -105,6 +110,29 @@ fn ctx_diagnostics(path: &Path, content: &str) -> Vec<Diagnostic> {
             ),
         ));
     }
+    if let Some((line, text)) = first_content_line(content) {
+        let canonical = text == CTX_HEADER
+            || text
+                .strip_prefix(CTX_HEADER)
+                .is_some_and(|rest| rest.starts_with(": ") && rest.len() > 2);
+        if !canonical {
+            diags.push(Diagnostic::warning(
+                path,
+                Some(line),
+                "ctx-header",
+                format!(
+                    "ctx.md must start with `{CTX_HEADER}` or `{CTX_HEADER}: <task>`; got {text:?}. The header is the task identity."
+                ),
+            ));
+        }
+    } else {
+        diags.push(Diagnostic::warning(
+            path,
+            None,
+            "ctx-header",
+            format!("ctx.md is empty; it must start with `{CTX_HEADER}`."),
+        ));
+    }
     for f in find_forbidden(content) {
         diags.push(Diagnostic::warning(
             path,
@@ -116,6 +144,15 @@ fn ctx_diagnostics(path: &Path, content: &str) -> Vec<Diagnostic> {
         ));
     }
     diags
+}
+
+/// First non-empty line, with its 1-based number.
+fn first_content_line(content: &str) -> Option<(usize, &str)> {
+    content
+        .lines()
+        .enumerate()
+        .map(|(i, line)| (i + 1, line.trim()))
+        .find(|(_, line)| !line.is_empty())
 }
 
 fn root_file_diagnostics(root: &Path) -> Vec<Diagnostic> {
@@ -383,7 +420,7 @@ Roadmap pointer: this supersedes v1.8.
     #[test]
     fn clean_ctx_has_no_forbidden() {
         let content = "\
-# Task: do a thing
+# Current Task Context: do a thing
 State: in progress
 ## Plan
 - [x] one
@@ -406,7 +443,7 @@ do two
     #[test]
     fn archive_warning_when_all_done() {
         let content = "\
-# Task: done thing
+# Current Task Context: done thing
 ## Plan
 - [x] one
 - [x] two
@@ -419,12 +456,37 @@ nothing
     #[test]
     fn no_archive_warning_when_steps_remain() {
         let content = "\
-# Task: thing
+# Current Task Context: thing
 ## Plan
 - [x] one
 - [ ] two
 ";
         assert!(ctx_codes(content).is_empty());
+    }
+
+    #[test]
+    fn header_invariant() {
+        assert!(ctx_codes("# Current Task Context\n").is_empty());
+        assert!(
+            ctx_codes("# Current Task Context: fix the fmt guard\n").is_empty()
+        );
+        // Leading blank lines are tolerated; the warning carries the line.
+        let diags = ctx_diagnostics(
+            Path::new("specs/ctx.md"),
+            "\n# Current Task: drifted\n",
+        );
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, "ctx-header");
+        assert_eq!(diags[0].line, Some(2));
+
+        assert_eq!(ctx_codes("# Current Task\n"), ["ctx-header"]);
+        assert_eq!(ctx_codes("# current task context\n"), ["ctx-header"]);
+        assert_eq!(
+            ctx_codes("# Current Task Context: \n"),
+            ["ctx-header"],
+            "empty task suffix is not a title"
+        );
+        assert_eq!(ctx_codes(""), ["ctx-header"]);
     }
 
     #[test]
