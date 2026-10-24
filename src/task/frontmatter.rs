@@ -23,6 +23,8 @@ pub struct Frontmatter {
     pub scope: Vec<String>,
     pub created: NaiveDate,
     pub source: Option<String>,
+    /// Size grade (`[quality.grade.<name>]`); `None` = the default grade.
+    pub grade: Option<String>,
     pub depends: Vec<TaskId>,
     pub attempts: u32,
     pub blocked_reason: Option<String>,
@@ -85,6 +87,7 @@ impl Frontmatter {
                 })
             })?;
         let source = optional_scalar(&mut fields, "source")?.map(|(s, _)| s);
+        let grade = optional_scalar(&mut fields, "grade")?.map(|(s, _)| s);
         let depends = match take(&mut fields, "depends") {
             None => Vec::new(),
             Some((v, l)) => list("depends", v, l)?
@@ -109,6 +112,7 @@ impl Frontmatter {
             scope,
             created,
             source,
+            grade,
             depends,
             attempts,
             blocked_reason,
@@ -134,6 +138,9 @@ impl Frontmatter {
         push("created", self.created.format(DATE_FORMAT).to_string());
         if let Some(source) = &self.source {
             push("source", render_scalar(source));
+        }
+        if let Some(grade) = &self.grade {
+            push("grade", render_scalar(grade));
         }
         if !self.depends.is_empty() {
             let ids: Vec<String> =
@@ -333,6 +340,7 @@ stage: verify
 scope: [src/status.rs, tests/cli.rs]
 created: 2026-10-02
 source: https://github.com/oiwn/specdev/issues/12
+grade: huge
 depends: [0005-scan-groups]
 attempts: 1
 blocked_reason: \"waiting on #12, see notes\"
@@ -353,6 +361,7 @@ labels: [cli, \"a, b\"]
         assert_eq!(fm.status, Status::InProgress);
         assert_eq!(fm.stage, Some(Stage::Verify));
         assert_eq!(fm.scope, vec!["src/status.rs", "tests/cli.rs"]);
+        assert_eq!(fm.grade.as_deref(), Some("huge"));
         assert_eq!(fm.attempts, 1);
         assert_eq!(
             fm.blocked_reason.as_deref(),

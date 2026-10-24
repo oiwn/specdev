@@ -11,6 +11,68 @@ task. This coexists with any conventional release notes already here.
 - files touched / decisions locked
 -->
 
+## 2026-10-25 — skill stale
+
+- `check` and `status` now warn `skill-stale` when the project's local skill install (`.agents/skills/specdev/`) drifts from the bundled skill — stale, modified, or missing files — with the `specdev skill install --local` remedy.
+- Task `0010-skill-stale`; source: session 2026-10-25: silent skill/version drift until skill check is run manually
+
+## 2026-10-25 — release 040
+
+- Released 0.4.0: README synced with the batch, version bumped, skill reinstalled and verified current, #15–#20 closed and #21 updated.
+- Task `0007-release-040`; source: https://github.com/oiwn/specdev/issues/21
+
+## 2026-10-25 — Release 0.4.0: trust + papercuts
+
+Batch of eight tasks from real-session friction (#15–#21), plus the 0.4.0 release itself. Human draft approval is now a recorded, gated step; tasks are explicit by default; task size grades make the quality gate honest for large working manuals; the skill ships a full config reference.
+
+- `task approve <id> --note` — draft → ready requires the human's recorded approval; a bounce back to draft voids it (#17, #20).
+- Explicit-only tasks — `[task] explicit_only = true` default; small fixes are direct edits; working-tree out-of-scope warns instead of erroring (#19).
+- Task grades — `[quality.grade.<name>]` + `task set <id> grade`, `tiny`/`huge` defaults, split-or-raise warning wording (#18, #21).
+- fmt hardening — paths restricted to `specs/` + open tasks; `fmt --check` for CI/hooks (#20, #21).
+- `check` — ctx.md header invariant warning (#15); out-of-scope errors name the covering task (#20); `task done` CHANGELOG entries land above the newest dated heading (#20); `scope rm` takes a logged `--reason` (#20, #16).
+- Skill — `references/config.md` (specdev.toml semantics) shipped and verified by a generalized installer/checker; docs cover `scope rm`, `task approve`, grades, explicit-only.
+- Issues closed with the release: #15–#20; #21 stays open for the hygiene suite and parallel tasks.
+
+## 2026-10-25 — config skill
+
+- The skill ships `references/config.md` (full `specdev.toml` semantics, rules, recipes, sizing philosophy), and the installer/checker now ship and verify every bundled reference file, not just examples.
+- Task `0009-config-skill`; source: https://github.com/oiwn/specdev/issues/21
+
+## 2026-10-25 — task grades
+
+- Tasks declare a size grade (`task set <id> grade <name>`, from `[quality.grade.<name>]` tables; default `tiny`/`huge`), the quality gate measures against it, and over-limit warnings say whether to split or raise the grade.
+- Task `0008-task-grades`; source: https://github.com/oiwn/specdev/issues/18
+
+## 2026-10-25 — explicit only
+
+- Tasks are explicit by default: the skill says never create a task unless asked, and working-tree `out-of-scope` is a warning unless a project sets `[task] explicit_only = false`.
+- Task `0006-explicit-only`; source: https://github.com/oiwn/specdev/issues/19
+
+## 2026-10-25 — task approve
+
+- `specdev task approve <id> --note "<their words>"` records the human's draft approval in the log, and `advance` refuses draft → ready without it.
+- Task `0005-task-approve`; source: https://github.com/oiwn/specdev/issues/17
+
+## 2026-10-25 — scope ergonomics
+
+- `task scope rm` accepts an optional logged `--reason`, and out-of-scope errors name the other open task whose scope already covers the file.
+- Task `0004-scope-ergonomics`; source: https://github.com/oiwn/specdev/issues/20
+
+## 2026-10-25 — changelog placement
+
+- `task done` CHANGELOG entries now land above the newest dated entry instead of above whatever level-2 heading comes first.
+- Task `0003-changelog-placement`; source: https://github.com/oiwn/specdev/issues/20
+
+## 2026-10-25 — ctx header invariant
+
+- `check` and `status` now warn `ctx-header` when `ctx.md` doesn't start with `# Current Task Context` (optionally `: <task>`), with the offending line number.
+- Task `0002-ctx-header-invariant`; source: https://github.com/oiwn/specdev/issues/15
+
+## 2026-10-25 — fmt hardening
+
+- `specdev fmt` refuses paths outside `specs/` and open task files, and gains `--check` (report-only, exit 1) for CI and hooks.
+- Task `0001-fmt-hardening`; source: https://github.com/oiwn/specdev/issues/20
+
 ## 2026-10-05 — New specdev version: Phases 6–7
 
 Closes the ctx.md task "New specdev version and updated workflow" (started 2026-10-02). Phase 8 — skill, docs, dogfood, 0.3.0 release — moved to `specs/roadmap.md` → Next. Durable rules and gotchas from its Findings now live in `specs/overview.md`.

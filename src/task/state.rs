@@ -386,6 +386,11 @@ fn gates(
 ) -> Result<(), Error> {
     let id = &task.front.id;
     if from.status == Status::Draft && to.status == Status::Ready {
+        if !transition::replay(task).0.draft_approved {
+            return Err(usage(format!(
+                "`{id}` has no recorded human approval; `specdev task approve {id} --note \"<their words>\"` first (the human's step, quoting them)"
+            )));
+        }
         let open = scan::count_markers(&task.body).0;
         if open > 0 {
             return Err(usage(format!(
@@ -441,6 +446,31 @@ fn gates(
 
 const REVIEW: &str = "Review";
 
+/// Record the human's approval of a draft. The `advance` draft → ready gate
+/// requires it; the note should quote the human's words, not paraphrase.
+pub fn approve(
+    root: &Path,
+    query: &str,
+    note: Option<&str>,
+    format: Format,
+) -> Result<(), Error> {
+    let note = note
+        .map(|n| one_line("--note", n))
+        .transpose()?
+        .map(str::to_string);
+    apply(root, query, format, |task, _, _| {
+        if task.front.status != Status::Draft {
+            return Err(usage(format!(
+                "`{}` is `{}`; only a draft can be approved",
+                task.front.id,
+                task.position()
+            )));
+        }
+        let note = note.clone().unwrap_or_default();
+        Ok(Change::log(vec![LogEvent::DraftApproved { note }]))
+    })
+}
+
 pub fn block(
     root: &Path,
     query: &str,
@@ -491,6 +521,16 @@ pub fn set(
         let logged = match field {
             "source" => {
                 task.front.source = (!value.is_empty()).then(|| value.to_string());
+                value.to_string()
+            }
+            "grade" => {
+                if !value.is_empty() && !config.quality.grade.contains_key(value) {
+                    return Err(usage(format!(
+                        "unknown grade `{value}` (configured: {}); add a [quality.grade.{value}] table first",
+                        config.quality.grade_names().join(", ")
+                    )));
+                }
+                task.front.grade = (!value.is_empty()).then(|| value.to_string());
                 value.to_string()
             }
             "depends" => {
@@ -576,15 +616,20 @@ pub fn scope_rm(
     root: &Path,
     query: &str,
     path: &str,
+    reason: Option<&str>,
     format: Format,
 ) -> Result<(), Error> {
     let path = scope_path(path)?;
+    let reason = reason
+        .map(|r| one_line("--reason", r))
+        .transpose()?
+        .map(str::to_string);
     apply(root, query, format, |task, _, _| {
         if !task.front.scope.contains(&path) {
             return Err(usage(format!("`{path}` is not in scope")));
         }
         task.front.scope.retain(|p| *p != path);
-        Ok(Change::log(vec![LogEvent::ScopeRemove { path }]))
+        Ok(Change::log(vec![LogEvent::ScopeRemove { path, reason }]))
     })
 }
 

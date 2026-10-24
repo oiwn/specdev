@@ -389,7 +389,12 @@ fn skill_install_local_and_global() {
     let project = TempDir::new().unwrap();
     let env = [("HOME", home.path())];
     let version = env!("CARGO_PKG_VERSION");
-    let files = ["SKILL.md", "references/examples.md", "specdev.meta"];
+    let files = [
+        "SKILL.md",
+        "references/examples.md",
+        "references/config.md",
+        "specdev.meta",
+    ];
 
     let (_, err, code) =
         run_env(project.path(), &["skill", "install", "--local"], &env);
@@ -500,6 +505,19 @@ fn status_reports_warnings() {
         assert!(out.contains(want), "expected {want:?}, got {out}");
     }
     assert!(!out.contains("Deferred section"), "got {out}");
+
+    // Header drift is flagged with its line; `check` carries the same warning.
+    fs::write(specs.join("ctx.md"), "# Current Task: demo\n").unwrap();
+    let (out, err, code) = run(tmp.path(), &["check"]);
+    assert_eq!(code, 0, "warning only: {err}");
+    assert!(
+        out.contains("specs/ctx.md:1: warning[ctx-header]"),
+        "got {out}"
+    );
+    assert!(
+        out.contains("must start with `# Current Task Context`"),
+        "got {out}"
+    );
 }
 
 /// A valid task, as the Phase 4 commands would leave it, at `ready`.
@@ -621,6 +639,10 @@ fn drafted() -> (TempDir, std::path::PathBuf) {
         tmp.path(),
         &["task", "scope", "x", "add", "src/a.rs", "--reason", "core"],
     );
+    step(
+        tmp.path(),
+        &["task", "approve", "x", "--note", "plan looks good"],
+    );
     edit(&file, "## Plan\n\n", "## Plan\n\n- [ ] build it\n\n");
     edit(
         &file,
@@ -628,6 +650,173 @@ fn drafted() -> (TempDir, std::path::PathBuf) {
         "## Acceptance\n\n- [ ] cargo test\n\n",
     );
     (tmp, file)
+}
+
+#[test]
+fn draft_approval_gate() {
+    // An unapproved draft can't move to ready; `task approve` records the
+    // human's words, and a trip back to draft voids the approval.
+    let tmp = init_tmp();
+    let dir = tmp.path();
+    fs::create_dir(dir.join("src")).unwrap();
+    step(dir, &["task", "new", "x"]);
+    let file = dir.join("specs/tasks/0001-x.md");
+    edit(&file, "## Plan\n\n", "## Plan\n\n- [ ] build it\n\n");
+    edit(
+        &file,
+        "## Acceptance\n\n",
+        "## Acceptance\n\n- [ ] cargo test\n\n",
+    );
+
+    // No approval recorded: draft → ready refuses, with or without scope.
+    refused(
+        dir,
+        &file,
+        &["task", "advance", "x"],
+        "no recorded human approval",
+    );
+    step(
+        dir,
+        &["task", "scope", "x", "add", "src/a.rs", "--reason", "core"],
+    );
+    refused(
+        dir,
+        &file,
+        &["task", "advance", "x"],
+        "no recorded human approval",
+    );
+
+    // Approve records the quote; the advance moves.
+    step(dir, &["task", "approve", "x", "--note", "ship it"]);
+    let content = fs::read_to_string(&file).unwrap();
+    assert!(
+        content.contains("draft approved: ship it\n"),
+        "got {content}"
+    );
+    step(dir, &["task", "advance", "x"]);
+
+    // Approve is for drafts only.
+    refused(
+        dir,
+        &file,
+        &["task", "approve", "x", "--note", "too late"],
+        "only a draft can be approved",
+    );
+
+    // A bounce back to draft voids the approval; the note is optional.
+    step(dir, &["task", "advance", "x", "--to", "draft"]);
+    refused(
+        dir,
+        &file,
+        &["task", "advance", "x"],
+        "no recorded human approval",
+    );
+    step(dir, &["task", "approve", "x"]);
+    let content = fs::read_to_string(&file).unwrap();
+    assert!(content.contains("draft approved\n"), "got {content}");
+    step(dir, &["task", "advance", "x"]);
+}
+
+#[test]
+fn task_grades_shape_the_quality_gate() {
+    let tmp = init_tmp();
+    let dir = tmp.path();
+    // A tight default grade and a roomy named one.
+    fs::write(
+        dir.join("specdev.toml"),
+        "[quality.task]\nmax_lines = 10\n\n[quality.grade.big]\nmax_lines = 30\n",
+    )
+    .unwrap();
+    step(dir, &["task", "new", "manual"]);
+    let file = dir.join("specs/tasks/0001-manual.md");
+    edit(
+        &file,
+        "## Plan\n\n",
+        "## Plan\n\n- [ ] a step\n\n## Context\n\nA working manual that legitimately runs long.\n",
+    );
+
+    // Over the default grade: a warning naming the remedies.
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "warning: {out}");
+    assert!(out.contains("warning[quality-lines]"), "got {out}");
+    assert!(
+        out.contains("raise the grade (`specdev task set <id> grade <name>`)"),
+        "got {out}"
+    );
+
+    // Unknown grades are refused by `set` and flagged by `check` when
+    // hand-edited into the frontmatter.
+    refused(
+        dir,
+        &file,
+        &["task", "set", "manual", "grade", "enormous"],
+        "unknown grade `enormous`",
+    );
+    edit(&file, "status: draft", "status: draft\ngrade: enormous");
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 1, "got {out}");
+    assert!(
+        out.contains("error[grade]: unknown grade `enormous`"),
+        "got {out}"
+    );
+    edit(&file, "grade: enormous\n", "");
+
+    // The grade raises the limits; clearing it restores them.
+    step(dir, &["task", "set", "manual", "grade", "big"]);
+    let content = fs::read_to_string(&file).unwrap();
+    assert!(content.contains("grade: big\n"), "got {content}");
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(!out.contains("quality-lines"), "got {out}");
+    step(dir, &["task", "set", "manual", "grade", ""]);
+    let (out, _, _) = run(dir, &["check"]);
+    assert!(out.contains("quality-lines"), "cleared: {out}");
+}
+
+#[test]
+fn skill_stale_warns_from_check() {
+    let tmp = init_tmp();
+    let dir = tmp.path();
+
+    // No local install: nothing to say.
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(!out.contains("skill-stale"), "got {out}");
+
+    // Fresh install: still silent.
+    let (_, err, code) = run(dir, &["skill", "install", "--local"]);
+    assert_eq!(code, 0, "{err}");
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(!out.contains("skill-stale"), "got {out}");
+
+    // Drift = content differs; an old stamp explains it as stale. The
+    // warning is a warning, points at the installed file, names the remedy.
+    let meta = dir.join(".agents/skills/specdev/specdev.meta");
+    fs::write(&meta, "specdev_version=0.0.1\n").unwrap();
+    let skill = dir.join(".agents/skills/specdev/SKILL.md");
+    let installed = fs::read_to_string(&skill).unwrap();
+    fs::write(&skill, format!("{installed}\nhand-edited\n")).unwrap();
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "warning only: {out}");
+    assert!(
+        out.contains("warning[skill-stale]: local skill file is stale"),
+        "got {out}"
+    );
+    assert!(out.contains("specdev skill install --local"), "got {out}");
+
+    // Status carries the same warning (filename + message, no code there).
+    let (out, _, _) = run(dir, &["status"]);
+    assert!(
+        out.contains("SKILL.md: local skill file is stale"),
+        "got {out}"
+    );
+
+    // The remedy clears it.
+    run(dir, &["skill", "install", "--local"]);
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(!out.contains("skill-stale"), "got {out}");
 }
 
 #[test]
@@ -689,6 +878,7 @@ fn task_lifecycle_through_commands() {
         [
             "created: x",
             "scope add src/a.rs — core",
+            "draft approved: plan looks good",
             "advance draft → ready",
             "scope approved: src/a.rs",
             "advance ready → in-progress/implement",
@@ -724,6 +914,7 @@ fn state_commands_refuse_bad_changes() {
     let file = dir.join("specs/tasks/0001-x.md");
 
     // Safety net: draft → ready with empty scope/Plan/Acceptance adds errors.
+    step(dir, &["task", "approve", "x"]);
     refused(
         dir,
         &file,
@@ -783,6 +974,7 @@ fn state_commands_refuse_bad_changes() {
     );
     edit(&y, "## Plan\n\n", "## Plan\n\n- [ ] b\n\n");
     edit(&y, "## Acceptance\n\n", "## Acceptance\n\n- [ ] t\n\n");
+    step(dir, &["task", "approve", "y", "--note", "ok"]);
     step(dir, &["task", "advance", "y"]);
     refused(
         dir,
@@ -934,29 +1126,39 @@ fn scope_check_against_git_working_tree() {
     let (tmp, _) = drafted();
     let dir = tmp.path();
     fs::write(dir.join("src/a.rs"), "// a\n").unwrap();
-    fs::write(
-        dir.join("specdev.toml"),
-        "[scope]\nalways_allowed = [\"Cargo.lock\"]\n",
-    )
-    .unwrap();
     git(dir, &["init", "-q"]);
     git(dir, &["add", "-A"]);
     git(dir, &["commit", "-q", "-m", "baseline"]);
     implementing(dir);
 
-    // In scope, under specs/, or allowlisted: fine.
+    // In scope, under specs/, or allowlisted: fine (`init`'s default config
+    // allowlists nothing extra but exempts specs/).
     fs::write(dir.join("src/a.rs"), "// a, edited\n").unwrap();
     fs::write(dir.join("specs/ctx.md"), "# Current Task Context: x\n").unwrap();
-    fs::write(dir.join("Cargo.lock"), "# lock\n").unwrap();
     let (out, _, code) = run(dir, &["check"]);
     assert_eq!((code, out.as_str()), (0, "OK\n"));
 
-    // An untracked file outside scope fails until the scope is expanded.
+    // Default (`explicit_only = true`): a stray file is a warning — a small
+    // direct fix must not pressure the agent into creating a task.
     fs::write(dir.join("src/b.rs"), "// b\n").unwrap();
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 0, "warnings don't fail: {out}");
+    assert!(out.contains("src/b.rs: warning[out-of-scope]"), "got {out}");
+
+    // Strict projects (`explicit_only = false`) keep the error.
+    fs::write(
+        dir.join("specdev.toml"),
+        "[task]\nexplicit_only = false\n\n[scope]\nalways_allowed = [\"Cargo.lock\"]\n",
+    )
+    .unwrap();
+    git(dir, &["add", "specdev.toml"]);
+    git(dir, &["commit", "-q", "-m", "strict config"]);
+    fs::write(dir.join("Cargo.lock"), "# lock\n").unwrap();
     let (out, _, code) = run(dir, &["check"]);
     assert_eq!(code, 1);
     assert!(out.contains("src/b.rs: error[out-of-scope]"), "got {out}");
     assert!(out.contains("task scope 0001-x add src/b.rs"), "got {out}");
+    assert!(!out.contains("Cargo.lock"), "allowlisted: {out}");
     step(
         dir,
         &[
@@ -979,6 +1181,53 @@ fn scope_check_against_git_working_tree() {
     assert_eq!(code, 1);
     assert!(out.contains("README.md: error[out-of-scope]"), "got {out}");
     assert!(out.contains("NOTES.md: error[out-of-scope]"), "got {out}");
+
+    // A file another open task covers: the error names that task. (`step`
+    // can't be used here: this test keeps standing out-of-scope errors.)
+    let (_, err, code) = run(dir, &["task", "new", "other-thing"]);
+    assert_eq!(code, 0, "{err}");
+    let (_, err, code) = run(
+        dir,
+        &[
+            "task",
+            "scope",
+            "other-thing",
+            "add",
+            "src/z.rs",
+            "--reason",
+            "lives there",
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    fs::write(dir.join("src/z.rs"), "// z\n").unwrap();
+    let (out, _, code) = run(dir, &["check"]);
+    assert_eq!(code, 1);
+    assert!(
+        out.contains("in scope of `0002-other-thing` (draft)"),
+        "got {out}"
+    );
+
+    // `scope rm` takes an optional reason and logs it (the change itself is
+    // reverted first, so the removal adds no out-of-scope error).
+    fs::remove_file(dir.join("src/b.rs")).unwrap();
+    let (_, err, code) = run(
+        dir,
+        &[
+            "task",
+            "scope",
+            "x",
+            "rm",
+            "src/b.rs",
+            "--reason",
+            "never touched",
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let content = fs::read_to_string(dir.join("specs/tasks/0001-x.md")).unwrap();
+    assert!(
+        content.contains("scope rm src/b.rs — never touched"),
+        "got {content}"
+    );
 }
 
 #[test]
@@ -988,6 +1237,7 @@ fn scope_check_before_the_first_commit() {
     // until they change again.
     let (tmp, file) = drafted();
     let dir = tmp.path();
+    fs::write(dir.join("specdev.toml"), "[task]\nexplicit_only = false\n").unwrap();
     git(dir, &["init", "-q"]);
     for _ in 0..2 {
         let (_, err, code) = run(dir, &["task", "advance", "x"]);
@@ -1060,6 +1310,7 @@ fn ready_to_go(dir: &Path, slug: &str) -> std::path::PathBuf {
         dir,
         &["task", "scope", slug, "add", "src/a.rs", "--reason", "r"],
     );
+    step(dir, &["task", "approve", slug, "--note", "go"]);
     edit(&file, "## Plan\n\n", "## Plan\n\n- [x] build it\n\n");
     edit(
         &file,
@@ -1498,4 +1749,29 @@ fn fmt_normalizes_specs_and_check_flags_unformatted() {
     let (_, err, code) = run(dir, &["fmt", "specs/missing.md"]);
     assert_eq!(code, 1);
     assert!(err.contains("specs/missing.md"), "got {err}");
+
+    // Explicit paths outside the default set are refused, nothing is read.
+    fs::write(dir.join("README.md"), "# Read\nA paragraph\nwrapped.\n").unwrap();
+    let (_, err, code) = run(dir, &["fmt", "README.md"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("README.md"), "got {err}");
+    assert!(err.contains("specs/*.md"), "got {err}");
+    assert!(
+        fs::read_to_string(dir.join("README.md"))
+            .unwrap()
+            .contains("paragraph\nwrapped"),
+        "README untouched"
+    );
+
+    // --check reports without writing; clean tree exits 0.
+    let (out, _, code) = run(dir, &["fmt", "--check"]);
+    assert_eq!(code, 0, "got {out}");
+    assert!(out.starts_with("All "), "got {out}");
+
+    fs::write(&ideas, "# Ideas\n* one idea\n").unwrap();
+    let (out, _, code) = run(dir, &["fmt", "--check"]);
+    assert_eq!(code, 1, "got {out}");
+    assert!(out.contains("Would reformat specs/ideas.md"), "got {out}");
+    assert_eq!(fs::read_to_string(&ideas).unwrap(), "# Ideas\n* one idea\n");
+    run(dir, &["fmt"]);
 }

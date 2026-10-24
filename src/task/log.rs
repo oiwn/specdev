@@ -36,9 +36,16 @@ pub enum LogEvent {
     },
     ScopeRemove {
         path: String,
+        /// Why the entry was dropped; optional, for audit symmetry with add.
+        reason: Option<String>,
     },
     Blocked {
         reason: String,
+    },
+    /// The human's approval of a draft, recorded by `task approve`; the
+    /// draft → ready gate requires it (since the task last entered draft).
+    DraftApproved {
+        note: String,
     },
     /// The user's acceptance, in their words, recorded by `task done`.
     Approved {
@@ -91,8 +98,20 @@ impl fmt::Display for LogEvent {
             Self::ScopeAdd { path, reason } => {
                 write!(f, "scope add {path} — {reason}")
             }
-            Self::ScopeRemove { path } => write!(f, "scope rm {path}"),
+            Self::ScopeRemove {
+                path,
+                reason: Some(reason),
+            } => {
+                write!(f, "scope rm {path} — {reason}")
+            }
+            Self::ScopeRemove { path, reason: None } => {
+                write!(f, "scope rm {path}")
+            }
             Self::Blocked { reason } => write!(f, "blocked: {reason}"),
+            Self::DraftApproved { note } if note.is_empty() => {
+                write!(f, "draft approved")
+            }
+            Self::DraftApproved { note } => write!(f, "draft approved: {note}"),
             Self::Approved { quote } => write!(f, "approved: {quote}"),
             Self::Baseline(files) => {
                 let files: Vec<String> =
@@ -177,9 +196,16 @@ impl FromStr for LogEvent {
                 reason: reason.to_string(),
             });
         }
-        if let Some(path) = s.strip_prefix("scope rm ") {
+        if let Some(rest) = s.strip_prefix("scope rm ") {
+            // A path never contains ` — ` (rejected in `scope_path`), so the
+            // split is unambiguous; the reason is optional.
+            let (path, reason) = match rest.split_once(" — ") {
+                Some((path, reason)) => (path, Some(reason.to_string())),
+                None => (rest, None),
+            };
             return Ok(Self::ScopeRemove {
                 path: path.to_string(),
+                reason,
             });
         }
         if let Some(reason) = s.strip_prefix("blocked: ") {
@@ -197,6 +223,16 @@ impl FromStr for LogEvent {
                 })
                 .collect::<Result<_, _>>()?;
             return Ok(Self::Baseline(files));
+        }
+        if let Some(note) = s.strip_prefix("draft approved: ") {
+            return Ok(Self::DraftApproved {
+                note: note.to_string(),
+            });
+        }
+        if s == "draft approved" {
+            return Ok(Self::DraftApproved {
+                note: String::new(),
+            });
         }
         if let Some(quote) = s.strip_prefix("approved: ") {
             return Ok(Self::Approved {
@@ -282,9 +318,20 @@ mod tests {
             },
             LogEvent::ScopeRemove {
                 path: "src/old.rs".to_string(),
+                reason: None,
+            },
+            LogEvent::ScopeRemove {
+                path: "src/mistake.rs".to_string(),
+                reason: Some("scoped by accident; never touched".to_string()),
             },
             LogEvent::Blocked {
                 reason: "plan was wrong".to_string(),
+            },
+            LogEvent::DraftApproved {
+                note: String::new(),
+            },
+            LogEvent::DraftApproved {
+                note: "\"ship it\"".to_string(),
             },
             LogEvent::Approved {
                 quote: "\"looks good\"".to_string(),

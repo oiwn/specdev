@@ -6,6 +6,9 @@ required_sections = ["Plan", "Acceptance"]
 optional_sections = ["Summary", "Manual checks", "Context", "Findings", "Review", "Spec updates"]
 # Project-specific optional frontmatter fields.
 extra_fields = []
+# Tasks only when the user asks; small fixes are direct edits.
+# While true, working-tree out-of-scope findings are warnings.
+explicit_only = true
 
 [pipeline]
 # Entries into the `fix` stage before a task is blocked.

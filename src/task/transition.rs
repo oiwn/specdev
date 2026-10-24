@@ -105,6 +105,10 @@ pub struct Replayed {
     /// `None` until `scope approved`; in draft, scope is free.
     pub scope: Option<Vec<String>>,
     pub blocked_reason: Option<String>,
+    /// The human approved this draft (`task approve`) since it last entered
+    /// draft. Consumed by `advance` draft → ready; not replay-gated, so
+    /// logs from before the command existed stay valid.
+    pub draft_approved: bool,
 }
 
 impl Default for Replayed {
@@ -117,6 +121,7 @@ impl Default for Replayed {
             attempts: 0,
             scope: None,
             blocked_reason: None,
+            draft_approved: false,
         }
     }
 }
@@ -231,6 +236,9 @@ pub fn replay(task: &Task) -> (Replayed, Vec<Diagnostic>) {
                 }
                 if to.status == Status::Draft {
                     state.scope = None;
+                    // A task back in draft is a different draft: the old
+                    // approval no longer covers it.
+                    state.draft_approved = false;
                 }
                 if from.status == Status::Blocked {
                     state.blocked_reason = None;
@@ -256,7 +264,7 @@ pub fn replay(task: &Task) -> (Replayed, Vec<Diagnostic>) {
                     scope.push(path.clone());
                 }
             }
-            LogEvent::ScopeRemove { path } => {
+            LogEvent::ScopeRemove { path, .. } => {
                 if let Some(scope) = &mut state.scope {
                     scope.retain(|p| p != path);
                 }
@@ -276,6 +284,18 @@ pub fn replay(task: &Task) -> (Replayed, Vec<Diagnostic>) {
                     stage: None,
                 };
                 state.blocked_reason = Some(reason.clone());
+            }
+            LogEvent::DraftApproved { .. } => {
+                if state.position.status != Status::Draft {
+                    error(
+                        "log-transition",
+                        format!(
+                            "`{entry}`: a draft approval belongs to a draft task (task was `{}`)",
+                            state.position
+                        ),
+                    );
+                }
+                state.draft_approved = true;
             }
             LogEvent::Approved { .. } => {
                 if state.position.status != Status::Approval {
@@ -316,6 +336,46 @@ mod tests {
 
     fn codes(diags: &[Diagnostic]) -> Vec<&'static str> {
         diags.iter().map(|d| d.code).collect()
+    }
+
+    #[test]
+    fn draft_approval_replay_rules() {
+        // Recorded while in draft: the flag is set, no diagnostics.
+        let (state, diags) = replay(&task(
+            "draft",
+            &[
+                "2026-10-03 created: x",
+                "2026-10-03 draft approved: \"go ahead\"",
+            ],
+        ));
+        assert!(diags.is_empty(), "{diags:?}");
+        assert!(state.draft_approved);
+
+        // Outside draft it is a log error.
+        let (_, diags) = replay(&task(
+            "ready",
+            &[
+                "2026-10-03 created: x",
+                "2026-10-03 advance draft → ready",
+                "2026-10-03 scope approved: src/a.rs",
+                "2026-10-03 draft approved: late",
+            ],
+        ));
+        assert_eq!(codes(&diags), ["log-transition"], "{diags:?}");
+
+        // Entering draft again voids the approval.
+        let (state, diags) = replay(&task(
+            "draft",
+            &[
+                "2026-10-03 created: x",
+                "2026-10-03 draft approved: \"go ahead\"",
+                "2026-10-03 advance draft → ready",
+                "2026-10-03 scope approved: src/a.rs",
+                "2026-10-03 advance ready → draft",
+            ],
+        ));
+        assert!(diags.is_empty(), "{diags:?}");
+        assert!(!state.draft_approved);
     }
 
     #[test]

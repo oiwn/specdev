@@ -212,6 +212,18 @@ fn check_task(
             error("depends", format!("depends on unknown task `{dep}`"));
         }
     }
+    if let Some(grade) = &front.grade
+        && !config.quality.grade.contains_key(grade)
+    {
+        error(
+            "grade",
+            format!(
+                "unknown grade `{grade}` (configured: {}); set one with `specdev task set {} grade <name>`",
+                config.quality.grade_names().join(", "),
+                front.id
+            ),
+        );
+    }
 
     if !archived && front.status != Status::Done {
         diags.extend(completeness(task, &outline));
@@ -221,6 +233,7 @@ fn check_task(
             &task.render(),
             quality::Kind::Task,
             Some(front.scope.len()),
+            front.grade.as_deref(),
             config,
         ));
     }
@@ -317,8 +330,10 @@ fn scope_lint(task: &Task, root: &Path) -> Vec<Diagnostic> {
 
 /// Changed files (from git) against the scope of the in-progress task, or,
 /// when none is in progress, of the tasks awaiting approval (a file any of
-/// them covers is fine). Working-tree violations are errors; `--staged` (the
-/// pre-commit hook) only warns.
+/// them covers is fine). `--staged` (the pre-commit hook) warns, and so does
+/// the working tree while `[task] explicit_only = true` (default) — a small
+/// direct fix shouldn't pressure the agent into creating structure (#19);
+/// `explicit_only = false` makes working-tree violations errors.
 fn scope_check(
     store: &TaskStore,
     config: &Config,
@@ -342,9 +357,14 @@ fn scope_check(
     let Some(first) = owners.first() else {
         return Vec::new();
     };
+    let others: Vec<&Task> = store
+        .tasks
+        .iter()
+        .filter(|t| t.front.id != first.front.id)
+        .collect();
     match vcs::changed_files(root, staged) {
         vcs::Changes::Files(changed) => {
-            let severity = if staged {
+            let severity = if staged || config.task.explicit_only {
                 Severity::Warning
             } else {
                 Severity::Error
@@ -357,6 +377,7 @@ fn scope_check(
                     &changed,
                     &config.scope.always_allowed,
                     severity,
+                    &others,
                 )
             };
             let mut diags = violations(first);
@@ -411,13 +432,16 @@ fn without_baseline(task: &Task, root: &Path, changed: &[String]) -> Vec<String>
 }
 
 /// Changed paths (relative to `root`) that neither the task's scope, `specs/`,
-/// nor the project's `always_allowed` globs cover.
+/// nor the project's `always_allowed` globs cover. When another open task's
+/// scope does cover the path, the message says so — the change usually
+/// belongs to that task, not this one.
 fn scope_violations(
     task: &Task,
     root: &Path,
     changed: &[String],
     always_allowed: &[String],
     severity: Severity,
+    others: &[&Task],
 ) -> Vec<Diagnostic> {
     let id = &task.front.id;
     changed
@@ -428,12 +452,22 @@ fn scope_violations(
                 && !task.front.scope.iter().any(|e| covers(e, path))
         })
         .map(|path| {
+            let owners: Vec<String> = others
+                .iter()
+                .filter(|o| o.front.scope.iter().any(|e| covers(e, path)))
+                .map(|o| format!("`{}` ({})", o.front.id, o.front.status))
+                .collect();
+            let owners = if owners.is_empty() {
+                String::new()
+            } else {
+                format!("; in scope of {}", owners.join(", "))
+            };
             Diagnostic::error(
                 root.join(path),
                 None,
                 "out-of-scope",
                 format!(
-                    "changed but not in the scope of `{id}`; if the task needs it: `specdev task scope {id} add {path} --reason \"...\"`"
+                    "changed but not in the scope of `{id}`{owners}; if the task needs it: `specdev task scope {id} add {path} --reason \"...\"`"
                 ),
             )
             .with_severity(severity)
@@ -846,12 +880,41 @@ created: 2026-10-03
             &changed,
             &allowed,
             Severity::Error,
+            &[],
         );
         let flagged: Vec<String> =
             diags.iter().map(|d| d.file.display().to_string()).collect();
         assert_eq!(flagged, ["src/b.rs", "README.md"]);
         assert!(diags.iter().all(|d| d.code == "out-of-scope"));
         assert!(diags[0].message.contains("task scope 0001-a add src/b.rs"));
+        assert!(
+            !diags[0].message.contains("in scope of"),
+            "no candidates: {}",
+            diags[0].message
+        );
+
+        // A file another open task covers names that task.
+        let other = Task::parse(
+            Path::new("specs/tasks/0002-b.md"),
+            &VALID_READY
+                .replace("id: 0001-a", "id: 0002-b")
+                .replace("scope: [src/a.rs]", "scope: [src/b.rs]")
+                .replace("scope approved: src/a.rs", "scope approved: src/b.rs"),
+        )
+        .unwrap();
+        let diags = scope_violations(
+            &task,
+            Path::new(""),
+            &["src/b.rs".to_string()],
+            &[],
+            Severity::Error,
+            &[&other],
+        );
+        assert!(
+            diags[0].message.contains("in scope of `0002-b` (ready)"),
+            "got {}",
+            diags[0].message
+        );
 
         let warned = scope_violations(
             &task,
@@ -859,6 +922,7 @@ created: 2026-10-03
             &changed,
             &[],
             Severity::Warning,
+            &[],
         );
         assert_eq!(warned.len(), 3, "Cargo.lock flagged without the allowlist");
         assert!(warned.iter().all(|d| d.severity == Severity::Warning));

@@ -1,6 +1,7 @@
 //! `specdev.toml`: the per-project task contract, pipeline limits, acceptance
 //! defaults, and quality thresholds. Missing file or keys fall back to defaults.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -19,6 +20,10 @@ required_sections = ["Plan", "Acceptance"]
 optional_sections = ["Summary", "Manual checks", "Context", "Findings", "Review", "Spec updates"]
 # Project-specific optional frontmatter fields.
 extra_fields = []
+# Tasks are created only when the user asks for one; small fixes are direct
+# edits. While true, working-tree out-of-scope findings are warnings.
+# false restores task-per-small-change and makes out-of-scope an error.
+explicit_only = true
 
 [pipeline]
 # Failed verifies (verify → fix) before a task is blocked; revisions don't count.
@@ -46,6 +51,20 @@ max_lines = 150
 max_words = 1000
 max_plan_steps = 8
 max_scope = 6
+
+# Optional size grades a task can declare (`specdev task set <id> grade <name>`).
+# Keys set here win; the rest inherit from [quality.task] above; 0 turns a limit off.
+[quality.grade.tiny]
+max_lines = 80
+max_words = 500
+max_plan_steps = 5
+max_scope = 3
+
+[quality.grade.huge]
+max_lines = 300
+max_words = 2500
+max_plan_steps = 12
+max_scope = 12
 
 [quality.ctx]
 max_lines = 120
@@ -76,6 +95,10 @@ pub struct TaskDef {
     pub required_sections: Vec<String>,
     pub optional_sections: Vec<String>,
     pub extra_fields: Vec<String>,
+    /// Tasks exist only when the user asks for one (#19). While true, a
+    /// working-tree `out-of-scope` finding is a warning, so a small direct
+    /// fix doesn't pressure the agent into creating a task.
+    pub explicit_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -108,6 +131,9 @@ pub struct Quality {
     pub ctx: Limits,
     pub overview: Limits,
     pub changelog: Limits,
+    /// Size grades (`[quality.grade.<name>]`); unset tasks use `task`.
+    /// A file's table replaces the default of that name; unused names are inert.
+    pub grade: BTreeMap<String, Limits>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -150,11 +176,17 @@ struct RawQuality {
     ctx: Limits,
     overview: Limits,
     changelog: Limits,
+    grade: BTreeMap<String, Limits>,
 }
 
 impl From<RawQuality> for Quality {
     fn from(raw: RawQuality) -> Self {
         let d = Quality::default();
+        // Grade tables merge over the defaults by name: a project that
+        // defines none keeps `tiny`/`huge`, and defining one replaces that
+        // name entirely (its keys still inherit from `[quality.task]`).
+        let mut grade = d.grade;
+        grade.extend(raw.grade);
         Self {
             errors: raw.errors,
             forbid_tables: raw.forbid_tables,
@@ -162,6 +194,7 @@ impl From<RawQuality> for Quality {
             ctx: raw.ctx.or(d.ctx),
             overview: raw.overview.or(d.overview),
             changelog: raw.changelog.or(d.changelog),
+            grade,
         }
     }
 }
@@ -181,6 +214,7 @@ impl Default for TaskDef {
                 "Spec updates",
             ]),
             extra_fields: Vec::new(),
+            explicit_only: true,
         }
     }
 }
@@ -193,18 +227,40 @@ impl Default for Pipeline {
 
 impl Default for Quality {
     fn default() -> Self {
+        let grade = |lines, words, steps, scope: usize| Limits {
+            max_lines: Some(lines),
+            max_words: Some(words),
+            max_plan_steps: Some(steps),
+            max_scope: Some(scope),
+        };
         Self {
             errors: false,
             forbid_tables: false,
-            task: Limits {
-                max_plan_steps: Some(8),
-                max_scope: Some(6),
-                ..Limits::size(150, 1000)
-            },
+            task: grade(150, 1000, 8, 6),
             ctx: Limits::size(120, 600),
             overview: Limits::size(200, 1500),
             changelog: Limits::size(400, 3000),
+            grade: BTreeMap::from([
+                ("tiny".to_string(), grade(80, 500, 5, 3)),
+                ("huge".to_string(), grade(300, 2500, 12, 12)),
+            ]),
         }
+    }
+}
+
+impl Quality {
+    /// Effective limits for a task file: the declared grade's keys win,
+    /// the rest inherit from `[quality.task]` (the default grade).
+    pub fn task_limits(&self, grade: Option<&str>) -> Limits {
+        match grade.and_then(|g| self.grade.get(g)) {
+            Some(grade) => grade.clone().or(self.task.clone()),
+            None => self.task.clone(),
+        }
+    }
+
+    /// Configured grade names, sorted for messages.
+    pub fn grade_names(&self) -> Vec<&str> {
+        self.grade.keys().map(String::as_str).collect()
     }
 }
 
@@ -241,6 +297,40 @@ mod tests {
         assert_eq!(c.pipeline.max_attempts, 5);
         assert_eq!(c.task, TaskDef::default());
         assert_eq!(c.quality, Quality::default());
+    }
+
+    #[test]
+    fn explicit_only_defaults_true_and_can_be_turned_off() {
+        assert!(Config::default().task.explicit_only);
+        let c = Config::parse("[task]\nexplicit_only = false\n").unwrap();
+        assert!(!c.task.explicit_only);
+        assert_eq!(c.pipeline, Pipeline::default());
+    }
+
+    #[test]
+    fn grades_default_merge_and_inherit() {
+        let q = Quality::default();
+        assert_eq!(q.grade_names(), ["huge", "tiny"]);
+        // Unset task: the default grade.
+        assert_eq!(q.task_limits(None), q.task);
+        // Declared grade: its keys win, the rest inherit from [quality.task].
+        let tiny = q.task_limits(Some("tiny"));
+        assert_eq!(tiny.max_lines, Some(80));
+        assert_eq!(tiny.max_words, Some(500));
+        assert_eq!(tiny.max_plan_steps, Some(5));
+        assert_eq!(tiny.max_scope, Some(3));
+        // A file that defines a grade replaces that name; the built-ins stay.
+        let c = Config::parse(
+            "[quality.grade.big]\nmax_lines = 30\n\n[quality.grade.tiny]\nmax_lines = 0\n",
+        )
+        .unwrap();
+        let q = &c.quality;
+        assert_eq!(q.grade_names(), ["big", "huge", "tiny"]);
+        let big = q.task_limits(Some("big"));
+        assert_eq!(big.max_lines, Some(30));
+        assert_eq!(big.max_words, Some(1000), "inherited from [quality.task]");
+        // A whole limit turned off inside a grade.
+        assert_eq!(q.task_limits(Some("tiny")).max_lines, Some(0));
     }
 
     #[test]
