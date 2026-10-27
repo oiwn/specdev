@@ -2,21 +2,19 @@
 
 Committed future direction, in rough priority order. The task pipeline ("Dark Factory", design in `specs/factory.md`) is implemented through `task done`, `check`, the quality gate, and `fmt` — see CHANGELOG.md 2026-10-03 to 2026-10-05.
 
-## Next — 0.4.0 release: trust + papercuts
+## Next — distribution, then parallel work
 
-From real-session friction (#15–#21). Six tasks, then the release; issues #3–#8 and #10 closed as shipped or superseded.
+0.4.0 shipped (trust + papercuts: approve gate, explicit-only tasks, grades, skill-stale, config reference — CHANGELOG 2026-10-25). Next up, install without a Rust toolchain, then the parallel-tasks design.
 
-- **fmt hardening** (#20 item 2, #21 item 6): `fmt` rejects explicit paths outside `specs/` + open task files; `fmt --check` exits 1 without writing, for CI/hooks.
-- **ctx header invariant** (#15): `check` flags a `ctx.md` that doesn't start with `# Current Task Context` (warning, like `unformatted`).
-- **CHANGELOG placement** (#20 item 4): `task done` inserts above the newest dated entry — the file header already promises "newest at the top"; rule documented in overview.
-- **Scope ergonomics** (#20 items 3+6, #21 item 7, #16): `scope rm` takes an optional `--reason`; out-of-scope errors list every candidate task; skill documents `scope rm`.
-- **task approve** (#17, #20 item 5): human-run `specdev task approve <id> --note "..."` recorded in `## Log`; `advance` refuses draft → ready without it. Strict by default, no config knob.
-- **Explicit-only task creation** (#19): skill default "no task or record unless the user asks"; `[task] explicit_only` in config (false restores old behavior); out-of-scope downgrades to warning while true.
-- **Release 0.4.0**: version bump, CHANGELOG, `skill install --local` to re-dogfood, close #15–#17, #19, #20 (#21 stays open).
+- **Nix flake** (task 0011): `flake.nix` + lock at the repo root; `nix run github:oiwn/specdev`.
+- **Homebrew tap** (task 0012): release workflow builds and attaches per-target tarballs + checksums; formula drafted here for the user's `oiwn/homebrew-tap` repo; `brew install oiwn/tap/specdev`. Consumes the "Release binaries" idea.
+- **Parallel-tasks design** (#21 item 5): a design task in `ctx.md` extending `factory.md` — entity/component registry (`[entity.cli]`, future `[entity.server]`), non-overlapping in-progress tasks, `plan`/graph waves for an external orchestrator. Entity shape (first-class scope unit vs path alias) decided inside the design.
 
 ## Later
 
-- **Parallel tasks** (#21 item 5): multiple in-progress tasks with non-overlapping scopes, `specdev plan` computing waves for an external orchestrator (see "Future: parallel execution" in `factory.md`). Needs factory.md design first.
+- **Parallel tasks** (#21 item 5): multiple in-progress tasks with non-overlapping scopes, `specdev plan` computing waves for an external orchestrator (see "Future: parallel execution" in `factory.md`). Design is queued in Next; implementation follows it.
+- **Entity registry**: `[entity.<name>]` components (cli today, server someday) as scope units and per-entity defaults — shaped by the parallel-tasks design above.
+- **Tap bump automation**: the release workflow updates `oiwn/homebrew-tap` after publishing, once the tap exists and the manual bump has proven the formula.
 - **Task sizing overrides** (#18, #21 item 8): per-task limit overrides or a `kind: design` task shape, so large working-manual tasks comply without weakening global defaults.
 - **Done-task scope attribution** (#20 item 1): files of a `done` task become out-of-scope errors before the tree is committed; track a pending-commit scope or warn for unclaimed changes.
 - **Spec hygiene suite** (#21 items 1–4): `spec rm`, internal link checker, `specdev audit`, spec frontmatter schema validation.
